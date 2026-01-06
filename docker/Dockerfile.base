@@ -79,12 +79,13 @@ WORKDIR /app
 RUN mkdir -p /app/src /app/configs /app/data
 
 # Install Python dependencies
-RUN pip install --no-cache-dir --upgrade \
+# Note: --break-system-packages required for Debian 12 (PEP 668)
+RUN pip install --no-cache-dir --upgrade --break-system-packages \
     pip \
     setuptools \
     wheel
 
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir --break-system-packages \
     # Core scientific stack (minimal for MIR)
     numpy==1.24.3 \
     scipy==1.10.1 \
