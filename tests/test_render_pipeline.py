@@ -165,9 +165,13 @@ class TestRenderEngine:
 
             output_file = tmpdir_path / "mix.mp3"
 
-            # Mock subprocess to avoid actual Liquidsoap execution
-            with patch("autodj.render.render.subprocess.run") as mock_run:
+            # Mock subprocess and validation
+            with patch("autodj.render.render.subprocess.run") as mock_run, \
+                 patch("autodj.render.render._validate_output_file") as mock_validate, \
+                 patch("autodj.render.render._write_mix_metadata") as mock_metadata:
                 mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+                mock_validate.return_value = True
+                mock_metadata.return_value = True
 
                 result = engine.render_playlist(
                     str(trans_file),
@@ -178,6 +182,8 @@ class TestRenderEngine:
 
             assert result is True
             mock_run.assert_called_once()
+            mock_validate.assert_called_once_with(str(output_file))
+            mock_metadata.assert_called_once()
 
     def test_render_playlist_missing_transitions(self, config):
         """Handle missing transitions file."""
