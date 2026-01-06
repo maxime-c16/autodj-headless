@@ -87,21 +87,21 @@ RUN pip install --no-cache-dir --upgrade --break-system-packages \
 
 RUN pip install --no-cache-dir --break-system-packages \
     # Core scientific stack (minimal for MIR)
-    numpy==1.24.3 \
-    scipy==1.10.1 \
+    'numpy>=1.24,<1.25' \
+    'scipy>=1.10,<1.11' \
     \
     # Audio analysis
     # Note: librosa is heavy (RAM); use essentia or aubio instead for lightweight analysis
-    essentia==2.1.0 \
-    mutagen==1.46.0 \
-    audioread==3.1.1 \
+    'essentia>=2.1b5' \
+    'mutagen>=1.46' \
+    'audioread>=3.1' \
     \
     # Configuration
-    toml==0.10.2 \
+    'toml>=0.10' \
     \
     # Utilities
-    python-dateutil==2.8.2 \
-    pytz==2023.3
+    'python-dateutil>=2.8' \
+    'pytz>=2023.3'
 
 # Create non-root user (optional, but good practice)
 RUN useradd -m -u 1000 autodj && \
