@@ -167,4 +167,5 @@ class Config:
         return self.data.get(section, {})
 
     def __repr__(self) -> str:
-        return f"Config(version={self.get('config_version', 'unknown')})"
+        version = self.data.get('config_version', 'unknown')
+        return f"Config(version={version})"
