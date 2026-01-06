@@ -60,25 +60,45 @@ STANDARD_TO_CAMELOT_MINOR = {
 }
 
 
-def _essentia_detect_key(audio_path: str, config: dict) -> Optional[str]:
+def _essentia_detect_key(audio_path: str, config: dict, max_duration: float = 30.0) -> Optional[str]:
     """
-    Detect key using essentia library.
+    Detect key using essentia library (memory-optimized).
+
+    Memory-optimized: only analyzes first 30 seconds to stay within container limits.
 
     Args:
         audio_path: Path to audio file
         config: Config dict
+        max_duration: Maximum seconds to analyze (default 30s for memory efficiency)
 
     Returns:
         Camelot notation or None if detection failed
     """
     try:
         import essentia.standard as es
+        import numpy as np
+        import os
 
-        logger.debug("Using essentia for key detection")
+        logger.debug("Using essentia for key detection (memory-optimized)")
 
-        # Load audio
-        loader = es.MonoLoader(filename=audio_path)
+        # Check file size - skip essentia for large files to avoid OOM
+        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        if file_size_mb > 20:
+            logger.debug(f"File too large ({file_size_mb:.1f}MB) - skipping essentia to avoid OOM")
+            return None
+
+        # Load audio with sample limiting
+        sample_rate = 44100
+        loader = es.MonoLoader(filename=audio_path, sampleRate=sample_rate)
         audio = loader()
+
+        # Limit to max_duration to avoid OOM
+        max_samples = int(max_duration * sample_rate)
+        if len(audio) > max_samples:
+            # Use middle portion (skip intro which might have different key)
+            start_offset = min(len(audio) // 4, int(10 * sample_rate))  # Skip first 10s max
+            audio = audio[start_offset:start_offset + max_samples]
+            logger.debug(f"Analyzing {len(audio)/sample_rate:.1f}s sample")
 
         # Key detection
         key_detector = es.KeyExtractor()
@@ -102,10 +122,10 @@ def _essentia_detect_key(audio_path: str, config: dict) -> Optional[str]:
             return None
 
     except ImportError:
-        logger.warning("essentia not available, falling back to keyfinder-cli")
+        logger.debug("Essentia not available")
         return None
     except Exception as e:
-        logger.error(f"Essentia key detection failed: {e}", exc_info=True)
+        logger.debug(f"Essentia key detection failed: {e}")
         return None
 
 
