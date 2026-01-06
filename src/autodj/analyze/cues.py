@@ -140,8 +140,9 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
             cue_out_frame = len(smoothed_energy) - 1
 
         # Convert frame indices to sample offsets
-        cue_in_samples = cue_in_frame * hop_size
-        cue_out_samples = min(cue_out_frame * hop_size, total_samples - 1)
+        # Use int() to convert numpy types to native Python int for SQLite compatibility
+        cue_in_samples = int(cue_in_frame * hop_size)
+        cue_out_samples = int(min(cue_out_frame * hop_size, total_samples - 1))
 
         logger.info(
             f"✅ Cues detected: in={cue_in_samples}, out={cue_out_samples} "
