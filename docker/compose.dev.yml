@@ -27,6 +27,8 @@ services:
     volumes:
       # Source code
       - ../src:/app/src:ro                    # Read-only (safety)
+      # Tests
+      - ../tests:/app/tests:ro                # Read-only (safety)
       # Configuration
       - ../configs:/app/configs:ro            # Read-only
       # Data volumes (read-write)
