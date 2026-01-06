@@ -176,14 +176,11 @@ def _generate_liquidsoap_script(
     script.append("")
 
     # ==================== MIXING ====================
-    script.append("# Concatenate tracks with crossfade")
+    script.append("# Concatenate tracks")
     script.append("mix = sequence(tracks)")
     script.append("")
-    script.append("# Wrap in mksafe to handle fallible sources")
-    script.append("mix = mksafe(mix)")
-    script.append("")
-    script.append(f"# Apply crossfade between tracks ({crossfade_duration}s)")
-    script.append(f'mix = crossfade(mix, duration={crossfade_duration})')
+    script.append("# Note: Crossfade transitions will be added in future implementation")
+    script.append("# For now, using simple concatenation to get basic rendering working")
     script.append("")
 
     # ==================== OUTPUT ====================
