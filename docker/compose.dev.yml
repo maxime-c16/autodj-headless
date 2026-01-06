@@ -1,0 +1,105 @@
+version: '3.9'
+
+# Development docker-compose configuration for AutoDJ-Headless
+# Key principle: Source code is bind-mounted, never baked into image
+# Resource limits enforced per SPEC.md
+
+services:
+  autodj:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.base
+    container_name: autodj-dev
+    image: autodj-base:v1.0
+
+    # Interactive shell (allows exec commands)
+    stdin_open: true
+    tty: true
+
+    # ==================== RESOURCE LIMITS (MANDATORY per SPEC.md) ====================
+    cpus: '0.5'                    # Max 50% of one core (prevent CPU runaway)
+    mem_limit: 512m                # Hard limit: 512 MiB
+    mem_reservation: 256m          # Soft limit: 256 MiB (allow burst)
+    memswap_limit: 512m            # No paging to host disk
+    pids_limit: 256                # Prevent fork bombs
+
+    # ==================== BIND MOUNTS (fast iteration, code never in image) ====================
+    volumes:
+      # Source code
+      - ../src:/app/src:ro                    # Read-only (safety)
+      # Configuration
+      - ../configs:/app/configs:ro            # Read-only
+      # Data volumes (read-write)
+      - ../data/db:/app/data/db               # SQLite database
+      - ../data/playlists:/app/data/playlists  # Generated playlists
+      - ../data/mixes:/app/data/mixes         # Output mix files
+
+    # ==================== NETWORKING ====================
+    # Loopback only (per workflow.md Rule: Network is busy)
+    network_mode: bridge
+    ports:
+      # Expose only what's needed (Navidrome API assumed on host)
+      - "127.0.0.1:8080:8080"  # Optional: dev server port
+
+    # ==================== ENVIRONMENT ====================
+    environment:
+      # Python
+      PYTHONUNBUFFERED: "1"        # Real-time logging
+      PYTHONDONTWRITEBYTECODE: "1" # No __pycache__
+
+      # AutoDJ
+      AUTODJ_ENV: "development"
+      AUTODJ_CONFIG_PATH: "/app/configs/autodj.toml"
+      AUTODJ_LOG_DIR: "/app/data/logs"
+
+      # Navidrome (adjust if running elsewhere)
+      NAVIDROME_HOST: "192.168.1.57"  # Server IP
+      NAVIDROME_PORT: "4533"
+      NAVIDROME_API_PATH: "/rest"
+
+      # Audio
+      AUDIOREAD_FORMAT: "ffmpeg"
+
+    # ==================== RESOURCE MONITORING ====================
+    # Log limits for debugging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # ==================== WORKING DIRECTORY ====================
+    working_dir: /app
+
+    # ==================== SAFETY ====================
+    # Don't run as root
+    user: "1000:1000"
+
+    # Drop unnecessary capabilities
+    cap_drop:
+      - NET_RAW
+      - SYS_PTRACE
+
+    # Read-only root filesystem (except /tmp, /run)
+    read_only: false  # Need write access to /app/data
+
+    # Restart policy for failed jobs (but not for interactive dev)
+    restart_policy:
+      condition: on-failure
+      max_attempts: 0
+
+# ==================== NAMED VOLUMES ====================
+# Persist data across container restarts
+volumes:
+  autodj_db:
+    driver: local
+  autodj_playlists:
+    driver: local
+  autodj_mixes:
+    driver: local
+
+# ==================== NETWORK ====================
+networks:
+  default:
+    name: autodj-dev
+    driver: bridge

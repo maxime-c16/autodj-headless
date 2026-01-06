@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Data (runtime artifacts, never committed)
+data/db/*.sqlite
+data/db/*.sqlite-journal
+data/db/*.db
+data/playlists/*.m3u
+data/playlists/*.json
+data/mixes/*.mp3
+data/mixes/*.flac
+data/mixes/*.m4a
+data/logs/*.log
+
+# Temporary
+*.tmp
+*.temp
+/tmp/
+.tmp/
+
+# Docker
+docker-compose.override.yml
+.docker-sync/
+
+# System files
+*.log
+.env.local
+.env.*.local
+*.pid
+
+# Project-specific
+*.liq.tmp
+*.liq.generated
+liquidsoap.pid
+
+# Documentation (unless intentionally committed)
+docs/generated/
+site/

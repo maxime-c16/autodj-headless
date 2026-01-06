@@ -1,0 +1,119 @@
+version: '3.9'
+
+# Production docker stack configuration for AutoDJ-Headless
+# Deployed via: docker stack deploy -c docker/stack.prod.yml autodj
+# Use: Scheduled jobs only (via systemd timers or cron)
+# No bind-mounts (image is frozen in time)
+# Strict resource limits enforced
+
+services:
+  autodj:
+    image: autodj-base:v1.0-${DEPLOY_DATE}
+    container_name: autodj-prod
+
+    # ==================== RESOURCE LIMITS (MANDATORY per SPEC.md) ====================
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'              # Max 50% of one core
+          memory: 512M             # Hard limit: 512 MiB
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+    # ==================== VOLUMES (immutable, no bind-mounts) ====================
+    volumes:
+      # Named volumes only (persisted data)
+      - autodj_db:/app/data/db
+      - autodj_playlists:/app/data/playlists
+      - autodj_mixes:/app/data/mixes
+      - autodj_logs:/app/data/logs
+
+      # Read-only config (baked into image or mounted as ConfigMap in Swarm)
+      # In production, configs are embedded or pulled from a config server
+
+    # ==================== ENVIRONMENT ====================
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      AUTODJ_ENV: "production"
+      AUTODJ_CONFIG_PATH: "/app/configs/autodj.toml"
+      AUTODJ_LOG_DIR: "/app/data/logs"
+      NAVIDROME_HOST: "192.168.1.57"
+      NAVIDROME_PORT: "4533"
+
+    # ==================== LOGGING ====================
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+        labels: "app=autodj,env=prod"
+
+    # ==================== RESTART POLICY ====================
+    # For scheduled jobs: restart only if fails unexpectedly
+    restart_policy:
+      condition: on-failure
+      delay: 10s
+      max_attempts: 1
+      window: 120s
+
+    # ==================== NETWORKING ====================
+    networks:
+      - autodj-prod
+
+    # ==================== SECURITY ====================
+    user: "1000:1000"              # Non-root
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+      - /run:size=64m
+
+# ==================== NAMED VOLUMES ====================
+volumes:
+  autodj_db:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=192.168.1.57,vers=4,soft,timeo=180,bg
+      device: ":/music/autodj/db"
+  autodj_playlists:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=192.168.1.57,vers=4,soft,timeo=180,bg
+      device: ":/music/autodj/playlists"
+  autodj_mixes:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=192.168.1.57,vers=4,soft,timeo=180,bg
+      device: ":/music/autodj-mixes"
+  autodj_logs:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=192.168.1.57,vers=4,soft,timeo=180,bg
+      device: ":/music/autodj/logs"
+
+# ==================== NETWORKS ====================
+networks:
+  autodj-prod:
+    driver: overlay
+    driver_opts:
+      com.docker.network.driver.overlay.vxlanid: "4096"
+
+# ==================== CONSTRAINTS ====================
+# Note: These are suggestions for Swarm mode
+# In practice, use systemd timers on the host instead:
+#   [Unit]
+#   Description=AutoDJ Analyze
+#   [Timer]
+#   OnCalendar=*-*-* 02:30:00
+#   Persistent=true
+#   [Install]
+#   WantedBy=timers.target

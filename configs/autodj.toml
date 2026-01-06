@@ -1,0 +1,109 @@
+# AutoDJ-Headless Configuration
+# All values are bounded per SPEC.md § 8
+# This file is never baked into Docker images; it's bind-mounted in dev
+
+config_version = "1.0"
+
+# ==================== MIX GENERATION ====================
+[mix]
+# Target duration in minutes (range: 30-120)
+target_duration_minutes = 60
+
+# Maximum tracks in playlist (range: 10-150)
+max_playlist_tracks = 90
+
+# Seed track path (empty = random selection)
+seed_track_path = ""
+
+# ==================== SELECTION CONSTRAINTS ====================
+[constraints]
+# BPM tolerance as percentage (range: 2-10%)
+# At 126 BPM: ±4% = ±5 BPM = [121, 131] BPM
+bpm_tolerance_percent = 4.0
+
+# Energy window: lookahead tracks for continuity (range: 2-5)
+energy_window_size = 3
+
+# Minimum track duration in seconds (range: 60-300)
+min_track_duration_seconds = 120
+
+# Max repeat decay in hours (range: 24-720)
+# Don't repeat tracks within this many hours
+max_repeat_decay_hours = 168
+
+# ==================== MIR ANALYSIS ====================
+[analysis]
+# Aubio BPM detection parameters
+aubio_hop_size = 512           # Samples between frames (range: 256-2048)
+aubio_buf_size = 4096          # Frame size at 44.1 kHz (range: 2048-8192)
+bpm_search_range = [50, 200]   # Min and max BPM to search
+confidence_threshold = 0.5     # Reject low-confidence detections (range: 0-1)
+
+# ==================== KEY DETECTION ====================
+[key_detection]
+# Method: "essentia" or "keyfinder-cli"
+method = "essentia"
+
+# Spectral window size (range: 1024-8192)
+window_size = 4096
+
+# ==================== RENDERING ====================
+[render]
+# Output format: "mp3" or "flac"
+output_format = "mp3"
+
+# MP3 bitrate in kbps (range: 128-320)
+mp3_bitrate = 192
+
+# Crossfade duration in seconds (range: 2-8)
+crossfade_duration_seconds = 4.0
+
+# Time-stretch quality: "low", "medium", "high"
+# "high" = slower but better quality (preserves transients)
+time_stretch_quality = "high"
+
+# Enable LADSPA EQ in transitions (requires ladspa installed)
+enable_ladspa_eq = false
+
+# ==================== SYSTEM INTEGRATION ====================
+[system]
+# Music library mount point (read-only expected)
+library_path = "/music"
+
+# Output mixes directory (writable)
+mixes_output_path = "/music/autodj-mixes"
+
+# Database path
+database_path = "data/db/metadata.sqlite"
+
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level = "INFO"
+
+# ==================== RESOURCE LIMITS ====================
+# These are advisory; actual limits enforced by Docker
+[resources]
+# Max memory per job in MiB (SPEC.md: 512 MiB hard limit)
+max_memory_mb = 256
+
+# Max CPU cores (SPEC.md: 0.5 cores)
+max_cpu_cores = 0.5
+
+# Max runtime per phase in seconds
+max_analyze_time_sec = 30
+max_generate_time_sec = 30
+max_render_time_sec = 420  # 7 minutes for 60-min mix
+
+# ==================== NAVIDROME INTEGRATION ====================
+[navidrome]
+# Navidrome server details
+host = "192.168.1.57"
+port = 4533
+api_path = "/rest"
+
+# Navidrome credentials (leave empty to use env vars)
+# NAVIDROME_USER and NAVIDROME_PASS
+username = ""
+password = ""
+
+# Connect timeout in seconds
+connect_timeout_sec = 5

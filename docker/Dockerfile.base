@@ -1,0 +1,118 @@
+# AutoDJ-Headless Base Image
+# Installs all system dependencies and Python packages
+# Source code is bind-mounted for fast iteration
+
+FROM debian:12-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build essentials
+    build-essential \
+    git \
+    wget \
+    curl \
+    pkg-config \
+    \
+    # Python 3.11
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3-pip \
+    \
+    # FFmpeg and audio processing
+    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libswresample-dev \
+    \
+    # Aubio (BPM detection)
+    libaubio-dev \
+    libaubio-doc \
+    \
+    # Essentia (Music Information Retrieval)
+    libessentia-dev \
+    \
+    # Key detection (optional: keyfinder-cli)
+    # keyfinder-cli can be installed via apt or built from source
+    \
+    # LADSPA plugins for DSP/EQ
+    ladspa-sdk \
+    cmt \
+    \
+    # Liquidsoap dependencies
+    libocamlnet-ocaml \
+    libocamlnet-ocaml-dev \
+    ocaml \
+    ocaml-findlib \
+    \
+    # SQLite
+    sqlite3 \
+    libsqlite3-dev \
+    \
+    # Networking & utilities
+    net-tools \
+    iproute2 \
+    curl \
+    netcat-openbsd \
+    \
+    # Cleanup
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install Liquidsoap 2.2.x (headless, no GUI)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    liquidsoap \
+    liquidsoap-plugin-all \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Verify Liquidsoap version is 2.2.x
+RUN liquidsoap --version | grep -q "2.2" || \
+    (echo "ERROR: Liquidsoap version is not 2.2.x" && exit 1)
+
+# Set up Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Create application directory
+WORKDIR /app
+
+# Copy only requirements (if present) or create minimal requirements
+# Source code will be bind-mounted
+RUN mkdir -p /app/src /app/configs /app/data
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade \
+    pip \
+    setuptools \
+    wheel
+
+RUN pip install --no-cache-dir \
+    # Core scientific stack (minimal for MIR)
+    numpy==1.24.3 \
+    scipy==1.10.1 \
+    \
+    # Audio analysis
+    librosa==0.10.0 \
+    essentia==2.1.0 \
+    mutagen==1.46.0 \
+    audioread==3.1.1 \
+    \
+    # Configuration
+    toml==0.10.2 \
+    \
+    # Utilities
+    python-dateutil==2.8.2 \
+    pytz==2023.3
+
+# Create non-root user (optional, but good practice)
+RUN useradd -m -u 1000 autodj && \
+    chown -R autodj:autodj /app
+
+# Health check (Liquidsoap is running)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD liquidsoap --version > /dev/null 2>&1 || exit 1
+
+# Default entrypoint: bash (for interactive dev)
+ENTRYPOINT ["/bin/bash"]
+CMD ["-c", "tail -f /dev/null"]
