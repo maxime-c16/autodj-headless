@@ -149,13 +149,13 @@ def analyze_track(
 
         # Get duration
         duration = _get_audio_duration(str(file_path))
-        if duration < config.get("constraints", {}).get("min_track_duration_seconds", 120):
+        if duration < config["constraints"].get("min_track_duration_seconds", 120):
             logger.warning(f"Track too short ({duration:.1f}s), skipping")
             return False, None
 
         # Detect BPM
         logger.debug("  → Detecting BPM...")
-        bpm = detect_bpm(str(file_path), config.get("analysis", {}))
+        bpm = detect_bpm(str(file_path), config["analysis"])
         if not bpm:
             logger.warning("  ✗ BPM detection failed")
             return False, None
@@ -169,7 +169,7 @@ def analyze_track(
 
         # Detect cues
         logger.debug("  → Detecting cue points...")
-        cues = detect_cues(str(file_path), bpm, config.get("analysis", {}))
+        cues = detect_cues(str(file_path), bpm, config["analysis"])
         if not cues:
             logger.warning("  ✗ Cue detection failed, using full track")
             cue_in = 0
