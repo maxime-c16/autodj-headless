@@ -58,9 +58,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Liquidsoap 2.2.x (headless, no GUI)
+# Note: liquidsoap-plugin-all not available in Debian 12; comes with base package
 RUN apt-get update && apt-get install -y --no-install-recommends \
     liquidsoap \
-    liquidsoap-plugin-all \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Verify Liquidsoap version is 2.2.x
