@@ -156,7 +156,7 @@ def _generate_liquidsoap_script(
     script.append("")
 
     # ==================== SEQUENCE BUILD ====================
-    script.append("# Decode all tracks")
+    script.append("# Decode all tracks with ffmpeg")
 
     for idx, trans in enumerate(transitions):
         track_id = trans.get("track_id")
@@ -164,7 +164,7 @@ def _generate_liquidsoap_script(
         target_bpm = trans.get("target_bpm", 120.0)
 
         script.append(f"# Track {idx + 1}: {track_id}")
-        script.append(f'track{idx+1} = ffmpeg.decode.audio("{file_path}")')
+        script.append(f'track{idx+1} = input.ffmpeg("{file_path}")')
 
     script.append("")
     script.append("# Build mix sequence")
