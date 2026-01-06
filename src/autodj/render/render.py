@@ -58,8 +58,14 @@ def render(
             tmp.write(script)
             script_path = tmp.name
 
+        # Save debug copy
+        debug_script_path = Path("/tmp/last_render_standalone.liq")
+        debug_script_path.write_text(script)
+        logger.info(f"Debug script saved to: {debug_script_path}")
+
         # Execute Liquidsoap
         logger.info(f"Starting Liquidsoap render: {output_path}")
+        logger.debug(f"Script ({len(script.split(chr(10)))} lines):\n{script[:500]}...")
         result = subprocess.run(
             ["liquidsoap", script_path],
             timeout=timeout_seconds,
@@ -68,7 +74,10 @@ def render(
         )
 
         if result.returncode != 0:
-            logger.error(f"Liquidsoap failed: {result.stderr}")
+            logger.error(f"Liquidsoap failed with return code {result.returncode}")
+            logger.error(f"Liquidsoap stderr: {result.stderr if result.stderr else '(no stderr)'}")
+            logger.error(f"Liquidsoap stdout: {result.stdout if result.stdout else '(no stdout)'}")
+            logger.error(f"Debug script saved to: {debug_script_path}")
             _cleanup_partial_output(output_path)
             return False
 
@@ -401,6 +410,12 @@ class RenderEngine:
                 script_path = tmp.name
 
             logger.debug(f"Liquidsoap script: {script_path}")
+            logger.debug(f"Script ({len(script.split(chr(10)))} lines):\n{script[:500]}...")
+
+            # Also save to a known location for debugging
+            debug_script_path = Path("/tmp/last_render.liq")
+            debug_script_path.write_text(script)
+            logger.info(f"Debug script saved to: {debug_script_path}")
 
             result = subprocess.run(
                 ["liquidsoap", script_path],
@@ -410,8 +425,11 @@ class RenderEngine:
             )
 
             if result.returncode != 0:
-                logger.error(f"Liquidsoap failed: {result.stderr}")
-                logger.debug(f"Script stdout: {result.stdout}")
+                logger.error(f"Liquidsoap failed with return code {result.returncode}")
+                logger.error(f"Liquidsoap stderr: {result.stderr if result.stderr else '(no stderr)'}")
+                logger.error(f"Liquidsoap stdout: {result.stdout if result.stdout else '(no stdout)'}")
+                logger.error(f"Debug script saved to: {debug_script_path}")
+                logger.error(f"You can inspect with: cat {debug_script_path}")
                 _cleanup_partial_output(output_path)
                 return False
 

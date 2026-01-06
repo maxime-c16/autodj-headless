@@ -107,6 +107,25 @@ def main():
         print("🎙️  RENDERING MIX...")
         print("-" * 80)
 
+        # First, show what we're about to render
+        print("\n📋 M3U PLAYLIST FILE:")
+        with open(m3u_path) as f:
+            m3u_content = f.read()
+            print(m3u_content[:500])  # First 500 chars
+            if len(m3u_content) > 500:
+                print(f"... ({len(m3u_content) - 500} more chars)")
+
+        print("\n📋 TRANSITIONS PLAN (first transition):")
+        print(json.dumps(plan["transitions"][0], indent=2))
+
+        print("\n🔧 DEBUGGING INFO:")
+        print(f"   Transitions JSON path: {trans_path}")
+        print(f"   M3U playlist path: {m3u_path}")
+        print(f"   M3U file exists: {Path(m3u_path).exists()}")
+        print(f"   M3U file size: {Path(m3u_path).stat().st_size if Path(m3u_path).exists() else 'N/A'} bytes")
+        print(f"   Transitions file exists: {Path(trans_path).exists()}")
+        print(f"   Transitions file size: {Path(trans_path).stat().st_size if Path(trans_path).exists() else 'N/A'} bytes")
+
         output_dir = Path("/app/data/mixes")
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / "demo_mix_real.mp3"
