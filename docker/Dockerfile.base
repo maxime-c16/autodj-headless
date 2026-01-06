@@ -31,11 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libaubio-dev \
     libaubio-doc \
     \
-    # Essentia (Music Information Retrieval)
-    libessentia-dev \
-    \
-    # Key detection (optional: keyfinder-cli)
-    # keyfinder-cli can be installed via apt or built from source
+    # Key detection: Install keyfinder-cli binary
+    # Essentia will be installed via pip (libessentia-dev unavailable in Debian 12)
     \
     # LADSPA plugins for DSP/EQ
     ladspa-sdk \
@@ -93,7 +90,7 @@ RUN pip install --no-cache-dir \
     scipy==1.10.1 \
     \
     # Audio analysis
-    librosa==0.10.0 \
+    # Note: librosa is heavy (RAM); use essentia or aubio instead for lightweight analysis
     essentia==2.1.0 \
     mutagen==1.46.0 \
     audioread==3.1.1 \
