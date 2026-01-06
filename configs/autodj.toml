@@ -37,7 +37,7 @@ max_repeat_decay_hours = 168
 aubio_hop_size = 512           # Samples between frames (range: 256-2048)
 aubio_buf_size = 4096          # Frame size at 44.1 kHz (range: 2048-8192)
 bpm_search_range = [50, 200]   # Min and max BPM to search
-confidence_threshold = 0.5     # Reject low-confidence detections (range: 0-1)
+confidence_threshold = 0.05    # Very lenient - we normalize BPM anyway (range: 0-1)
 
 # ==================== KEY DETECTION ====================
 [key_detection]
