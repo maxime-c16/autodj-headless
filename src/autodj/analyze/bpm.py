@@ -149,10 +149,10 @@ def detect_bpm(audio_path: str, config: dict) -> Optional[float]:
     Detect BPM from audio file using multiple methods.
 
     Strategy:
-    1. Try essentia RhythmExtractor2013 (most accurate for full tracks)
-    2. Fall back to aubio tempo if essentia fails
+    1. Try aubio first (streaming, memory-efficient, works in 512MB container)
+    2. If aubio confidence is very low, try essentia on short tracks only
     3. Normalize BPM to DJ-friendly range (85-175 BPM)
-    4. Accept lower confidence threshold (0.1) since we normalize anyway
+    4. Accept lower confidence threshold since we normalize anyway
 
     Args:
         audio_path: Path to audio file
@@ -161,26 +161,38 @@ def detect_bpm(audio_path: str, config: dict) -> Optional[float]:
     Returns:
         BPM value (float, range 85-175) or None if detection failed
     """
+    import os
+
     bpm_range = config.get("bpm_search_range", [50, 200])
-    # Lower threshold - we're more lenient since we use multiple methods
-    confidence_threshold = config.get("confidence_threshold", 0.1)
+    # Very lenient threshold - we trust the normalization
+    confidence_threshold = config.get("confidence_threshold", 0.05)
 
     detected_bpm = None
     confidence = 0.0
     method = None
 
-    # Try essentia first (more accurate)
-    result = _detect_bpm_essentia(audio_path)
+    # Try aubio first (streaming, memory-efficient)
+    result = _detect_bpm_aubio(audio_path, config)
     if result:
         detected_bpm, confidence = result
-        method = "essentia"
+        method = "aubio"
 
-    # Fall back to aubio
-    if detected_bpm is None:
-        result = _detect_bpm_aubio(audio_path, config)
-        if result:
-            detected_bpm, confidence = result
-            method = "aubio"
+    # If aubio failed or very low confidence, try essentia for small files only
+    # (essentia loads entire file into memory - risky for large files in 512MB container)
+    if detected_bpm is None or confidence < 0.2:
+        try:
+            file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+            # Only try essentia for files under 30MB to avoid OOM
+            if file_size_mb < 30:
+                essentia_result = _detect_bpm_essentia(audio_path)
+                if essentia_result:
+                    essentia_bpm, essentia_conf = essentia_result
+                    # Use essentia if it has better confidence
+                    if essentia_conf > confidence:
+                        detected_bpm, confidence = essentia_bpm, essentia_conf
+                        method = "essentia"
+        except Exception as e:
+            logger.debug(f"Essentia fallback skipped: {e}")
 
     # No detection succeeded
     if detected_bpm is None:
