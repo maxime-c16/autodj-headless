@@ -155,35 +155,22 @@ def _generate_liquidsoap_script(
     script.append('set("clock.sync", false)')
     script.append("")
 
-    # ==================== HELPER FUNCTIONS ====================
-    script.append("# Load track with ffmpeg decoder")
-    script.append('def load_track(path, cue_start_s, cue_end_s, target_bpm) =')
-    script.append("  # Load audio file with ffmpeg")
-    script.append('  ffmpeg.decode.audio(path)')
-    script.append("end")
-    script.append("")
-
     # ==================== SEQUENCE BUILD ====================
-    script.append("# Build mix sequence")
-    script.append("tracks = [")
+    script.append("# Decode all tracks")
 
     for idx, trans in enumerate(transitions):
         track_id = trans.get("track_id")
         file_path = trans.get("file_path", "")
-        entry_cue = trans.get("entry_cue", "cue_in")
-        exit_cue = trans.get("exit_cue", "cue_out")
-        hold_duration_bars = trans.get("hold_duration_bars", 16)
         target_bpm = trans.get("target_bpm", 120.0)
-        mix_out_seconds = trans.get("mix_out_seconds", 4.0)
 
-        # Estimate cue times (placeholder, would need actual analysis)
-        # For now, use full track duration minus small margins
-        cue_start_s = 0.0
-        cue_end_s = 0.0  # 0 = full duration
+        script.append(f"# Track {idx + 1}: {track_id}")
+        script.append(f'track{idx+1} = ffmpeg.decode.audio("{file_path}")')
 
-        script.append(f"  # Track {idx + 1}: {track_id}")
-        script.append(f'  load_track("{file_path}", {cue_start_s}, {cue_end_s}, {target_bpm}),')
-
+    script.append("")
+    script.append("# Build mix sequence")
+    script.append("tracks = [")
+    for idx in range(len(transitions)):
+        script.append(f"  track{idx+1},")
     script.append("]")
     script.append("")
 
