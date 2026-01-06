@@ -114,7 +114,7 @@ def render(
 
 
 def _generate_liquidsoap_script(
-    plan: dict, output_path: str, config: dict
+    plan: dict, output_path: str, config: dict, m3u_path: str = ""
 ) -> str:
     """
     Generate Liquidsoap offline mixing script.
@@ -129,6 +129,7 @@ def _generate_liquidsoap_script(
         plan: Transitions plan dict
         output_path: Path to output file
         config: Render config
+        m3u_path: Path to M3U playlist file (optional)
 
     Returns:
         Liquidsoap script as string
@@ -156,21 +157,18 @@ def _generate_liquidsoap_script(
     script.append("")
 
     # ==================== SEQUENCE BUILD ====================
-    script.append("# Create playlist file in memory")
-    script.append("# Note: In real deployment, this would be read from an M3U file")
-    script.append("# For now, we generate tracks directly")
-    script.append("")
-    script.append("# Build mix from playlist")
-    script.append("mix = playlist.once([")
+    if m3u_path:
+        script.append("# Load mix from M3U playlist file")
+        script.append(f'mix = playlist.once("{m3u_path}")')
+    else:
+        script.append("# Create playlist from transition data")
+        script.append("mix = playlist.once([")
+        for idx, trans in enumerate(transitions):
+            track_id = trans.get("track_id")
+            file_path = trans.get("file_path", "")
+            script.append(f'  "{file_path}",  # Track {idx + 1}: {track_id}')
+        script.append("])")
 
-    for idx, trans in enumerate(transitions):
-        track_id = trans.get("track_id")
-        file_path = trans.get("file_path", "")
-        target_bpm = trans.get("target_bpm", 120.0)
-
-        script.append(f'  "{file_path}",  # Track {idx + 1}: {track_id}')
-
-    script.append("])")
     script.append("")
     script.append("# Note: Crossfade transitions will be added in future implementation")
     script.append("")
@@ -364,7 +362,7 @@ class RenderEngine:
                 trans["file_path"] = file_paths[idx]
 
         # Generate script
-        script = _generate_liquidsoap_script(plan, output_path, self.config)
+        script = _generate_liquidsoap_script(plan, output_path, self.config, playlist_m3u_path)
         if not script:
             logger.error("Failed to generate Liquidsoap script")
             return False
