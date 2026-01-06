@@ -63,12 +63,10 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
         source = aubio.source(audio_path, hop_size=hop_size)
         sample_rate = source.samplerate
 
-        # Create onset detector and energy calculator
+        # Create onset detector for cue-in detection
         onset_detector = aubio.onset("energy", buf_size=buf_size, hop_size=hop_size)
-        pv = aubio.pvoc(buf_size, hop_size)
-        spectral_centroid = aubio.spectralcentroid(buf_size, sample_rate)
 
-        # Process audio and collect energy values
+        # Process audio and collect onset/energy data
         energies = []
         onsets = []
         frame_count = 0
@@ -79,10 +77,9 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
             if num_read == 0:
                 break
 
-            # Calculate spectral energy
-            spectrum = pv(samples)
-            energy = aubio.pyobjects.fvec_to_np(spectrum.phas)[: len(samples)].sum()
-            energies.append(energy)
+            # Calculate frame energy (RMS)
+            frame_energy = np.sqrt(np.mean(samples ** 2))
+            energies.append(frame_energy)
 
             # Detect onset
             is_onset = onset_detector(samples)
@@ -99,7 +96,7 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
             logger.warning("Insufficient audio data for cue detection")
             return None
 
-        # Convert to numpy arrays
+        # Convert to numpy arrays for analysis
         energy_array = np.array(energies)
         energy_array = np.maximum(energy_array, 1e-6)  # Avoid log(0)
         energy_db = 20 * np.log10(energy_array / energy_array.max())
@@ -108,18 +105,20 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
         window_size = max(1, len(energy_db) // 50)  # ~2% of track
         smoothed_energy = np.convolve(energy_db, np.ones(window_size) / window_size, mode="same")
 
-        # Find cue-in: first energetic peak
+        # Find cue-in: first energetic peak or first onset
         threshold = smoothed_energy.max() * 0.6  # 60% of max
         above_threshold = np.where(smoothed_energy > threshold)[0]
 
-        if len(above_threshold) == 0:
-            logger.warning("No energy peaks found for cue detection")
-            return None
+        if len(above_threshold) > 0:
+            cue_in_frame = above_threshold[0]
+        elif len(onsets) > 0:
+            # Fallback: use first detected onset
+            cue_in_frame = onsets[0]
+        else:
+            # Last resort: start from beginning
+            cue_in_frame = 0
 
-        cue_in_frame = above_threshold[0]
-
-        # Find cue-out: energy drop in tail
-        # Look at last 20% of track and find drop
+        # Find cue-out: energy drop in tail or use 95% of track
         tail_start = max(0, int(len(smoothed_energy) * 0.8))
         tail_energy = smoothed_energy[tail_start:]
 
