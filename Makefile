@@ -74,7 +74,7 @@ rebuild:
 analyze:
 	@echo "🔍 Running MIR analysis..."
 	@echo "📊 Per SPEC.md: Single file at a time, ≤30 sec per track, ≤512 MiB RAM"
-	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
+	docker-compose -f $(DEV_COMPOSE) exec -T -e MUSIC_LIBRARY_PATH="$(MUSIC_LIBRARY_PATH)" autodj \
 		python -m src.scripts.analyze_library
 	@echo "✅ Analysis complete."
 
