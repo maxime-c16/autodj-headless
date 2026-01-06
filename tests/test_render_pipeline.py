@@ -95,7 +95,7 @@ class TestLiquidsoapScriptGeneration:
         """Script includes crossfade configuration."""
         script = _generate_liquidsoap_script(sample_plan, "/tmp/mix.mp3", config)
 
-        assert "smart_crossfade" in script
+        assert "crossfade" in script
         assert "4.0" in script  # crossfade duration
 
     def test_script_mp3_output(self, sample_plan, config):

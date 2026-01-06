@@ -158,8 +158,8 @@ def _generate_liquidsoap_script(
     # ==================== HELPER FUNCTIONS ====================
     script.append("# Load track with cue points")
     script.append('def load_track(path, cue_start_s, cue_end_s, target_bpm) =')
-    script.append("  # Load audio file")
-    script.append('  audio = ffmpeg.decode(path)')
+    script.append("  # Load audio file with ffmpeg")
+    script.append('  audio = ffmpeg.decode.audio(path)')
     script.append("")
     script.append("  # Extract cue region if specified")
     script.append("  if cue_start_s > 0.0 then")
@@ -204,7 +204,7 @@ def _generate_liquidsoap_script(
     script.append("mix = sequence(tracks)")
     script.append("")
     script.append(f"# Apply crossfade between tracks ({crossfade_duration}s)")
-    script.append(f'mix = smart_crossfade(mix, duration={crossfade_duration})')
+    script.append(f'mix = crossfade(mix, duration={crossfade_duration})')
     script.append("")
 
     # ==================== OUTPUT ====================
