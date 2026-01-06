@@ -297,15 +297,254 @@ class MerlinGreedySelector:
         return playlist
 
 
+class BlastxcssSelector(MerlinGreedySelector):
+    """
+    High-energy specialized selector (Blastxcss).
+
+    Extends Merlin with high-energy heuristics:
+    - Prefers high-energy tracks
+    - Builds energy curve: intro → build → peak → comedown
+    - Targets peak energy at mix midpoint
+    - May relax BPM constraints slightly for energy continuity
+    """
+
+    def __init__(self, database, constraints: SelectionConstraints):
+        """Initialize Blastxcss selector."""
+        super().__init__(database, constraints)
+        logger.info("BlastxcssSelector initialized (high-energy mode)")
+
+    def _estimate_progress(self, current_duration: float, target_duration: float) -> float:
+        """
+        Calculate progress through mix (0.0-1.0).
+
+        Args:
+            current_duration: Elapsed duration in seconds
+            target_duration: Total target duration in seconds
+
+        Returns:
+            Progress ratio (0.0 = start, 0.5 = middle, 1.0 = end)
+        """
+        if target_duration <= 0:
+            return 0.0
+        return min(1.0, current_duration / target_duration)
+
+    def _target_energy_for_position(self, progress: float) -> float:
+        """
+        Calculate ideal energy for current mix position.
+
+        Energy curve: 0.3 (intro) → 0.8 (peak at 0.5) → 0.4 (outro)
+
+        Args:
+            progress: Progress through mix (0.0-1.0)
+
+        Returns:
+            Target energy level (0.0-1.0)
+        """
+        if progress < 0.3:
+            # Intro phase: build from 0.3
+            return 0.3 + (progress / 0.3) * 0.2
+        elif progress < 0.5:
+            # Build phase: 0.5 → 0.8
+            mid = (progress - 0.3) / 0.2
+            return 0.5 + mid * 0.3
+        elif progress < 0.7:
+            # Peak phase: sustain at 0.8
+            return 0.8
+        else:
+            # Outro phase: 0.8 → 0.4
+            outro = (progress - 0.7) / 0.3
+            return 0.8 - outro * 0.4
+
+    def choose_next(
+        self,
+        current_track: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        progress: float = 0.0,
+    ) -> Optional[tuple]:
+        """
+        Choose next track with energy curve preference.
+
+        Overrides Merlin's choose_next to add energy curve awareness.
+
+        Args:
+            current_track: Current track metadata
+            candidates: List of candidate tracks
+            progress: Progress through mix (0.0-1.0)
+
+        Returns:
+            Tuple (track_id, hints) or None
+        """
+        from .energy import estimate_track_energy, compute_energy_distance
+
+        if not candidates:
+            logger.debug("No candidates available")
+            return None
+
+        # Get target energy for this position
+        target_energy = self._target_energy_for_position(progress)
+        logger.debug(f"Progress: {progress:.2f}, Target energy: {target_energy:.2f}")
+
+        # Filter by constraints (harmonic, BPM, repeat decay)
+        valid_candidates = []
+
+        for candidate in candidates:
+            track_id = candidate.get("id")
+            if track_id in self.used_in_set:
+                continue
+
+            if self._is_recently_used(track_id, self.constraints.max_repeat_decay):
+                logger.debug(f"Track {track_id} recently used; skipping")
+                continue
+
+            # Check BPM compatibility
+            if not self._bpm_compatible(
+                current_track.get("bpm"),
+                candidate.get("bpm"),
+                self.constraints.bpm_tolerance,
+            ):
+                logger.debug(f"Track {track_id} BPM incompatible")
+                continue
+
+            # Check harmonic compatibility
+            if not self._camelot_compatible(current_track.get("key"), candidate.get("key")):
+                logger.debug(f"Track {track_id} key incompatible")
+                continue
+
+            valid_candidates.append(candidate)
+
+        if not valid_candidates:
+            logger.debug("No valid candidates after filtering")
+            return None
+
+        # Score candidates by energy proximity to target
+        scored = []
+        for candidate in valid_candidates:
+            track_id = candidate.get("id")
+            candidate_energy = estimate_track_energy(candidate)
+            energy_distance = compute_energy_distance(target_energy, candidate_energy)
+
+            # Prefer candidates close to target energy
+            # (lower distance = better)
+            scored.append((track_id, candidate_energy, energy_distance, candidate))
+
+        # Sort by energy distance (ascending)
+        scored.sort(key=lambda x: x[2])
+
+        # Pick best match
+        chosen_id, chosen_energy, distance, chosen = scored[0]
+        self.used_in_set.add(chosen_id)
+
+        hints = {
+            "bpm": chosen.get("bpm"),
+            "key": chosen.get("key"),
+            "energy": chosen_energy,
+            "target_energy": target_energy,
+            "energy_distance": distance,
+            "valid_count": len(valid_candidates),
+        }
+
+        logger.debug(
+            f"Chose {chosen_id}: energy={chosen_energy:.2f}, "
+            f"target={target_energy:.2f}, distance={distance:.2f}"
+        )
+
+        return (chosen_id, hints)
+
+    def build_playlist(
+        self,
+        library: List[Dict[str, Any]],
+        seed_track_id: str,
+        target_duration_minutes: int,
+        max_tracks: int = 90,
+    ) -> Optional[List[str]]:
+        """
+        Build high-energy playlist with energy curve.
+
+        Args:
+            library: List of track metadata
+            seed_track_id: Starting track ID
+            target_duration_minutes: Target mix duration
+            max_tracks: Maximum number of tracks
+
+        Returns:
+            List of track IDs, or None if generation failed
+        """
+        library_dict = {t.get("id"): t for t in library}
+
+        if seed_track_id not in library_dict:
+            logger.error(f"Seed track {seed_track_id} not found")
+            return None
+
+        seed_track = library_dict[seed_track_id]
+        playlist = [seed_track_id]
+        total_duration = seed_track.get("duration_seconds", 0)
+        target_duration_seconds = target_duration_minutes * 60
+
+        self.used_in_set.add(seed_track_id)
+
+        logger.info(
+            f"Building high-energy playlist from {seed_track_id} "
+            f"(target: {target_duration_minutes}min)"
+        )
+
+        current_track = seed_track
+        iteration = 1
+
+        # Greedy loop with energy curve awareness
+        while total_duration < target_duration_seconds and len(playlist) < max_tracks:
+            # Calculate progress
+            progress = total_duration / target_duration_seconds if target_duration_seconds > 0 else 0.0
+
+            # Get remaining candidates
+            candidates = [
+                t for t in library
+                if t.get("id") not in self.used_in_set
+                and t.get("duration_seconds", 0) >= self.constraints.min_duration
+            ]
+
+            if not candidates:
+                logger.warning("No more valid candidates")
+                break
+
+            # Choose next with energy curve consideration
+            result = self.choose_next(current_track, candidates, progress=progress)
+            if result is None:
+                logger.warning("No compatible next track found")
+                break
+
+            next_track_id, hints = result
+            next_track = library_dict[next_track_id]
+
+            playlist.append(next_track_id)
+            total_duration += next_track.get("duration_seconds", 0)
+
+            logger.debug(
+                f"Iteration {iteration}: added {next_track_id} "
+                f"(energy: {hints.get('energy', 0):.2f}, "
+                f"total: {total_duration}s)"
+            )
+
+            current_track = next_track
+            iteration += 1
+
+        logger.info(
+            f"✅ High-energy playlist built: {len(playlist)} tracks, "
+            f"{total_duration}s ({total_duration/60:.1f}min)"
+        )
+
+        return playlist
+
+
 def select_playlist(
     library: Dict[str, Any],
     seed_track_id: str,
     target_duration_minutes: int,
     constraints: SelectionConstraints,
     database=None,
+    selector_mode: str = "merlin",
 ) -> Optional[List[str]]:
     """
-    Generate a playlist using greedy graph traversal (Merlin selector).
+    Generate a playlist using greedy graph traversal.
 
     Args:
         library: List of track metadata dicts (from database)
@@ -313,9 +552,14 @@ def select_playlist(
         target_duration_minutes: Target mix duration in minutes
         constraints: SelectionConstraints object
         database: Database connection (for repeat decay checks)
+        selector_mode: "merlin" (balanced) or "blastxcss" (high-energy)
 
     Returns:
         List of track IDs in playback order, or None if generation failed
     """
-    selector = MerlinGreedySelector(database, constraints)
+    if selector_mode == "blastxcss":
+        selector = BlastxcssSelector(database, constraints)
+    else:
+        selector = MerlinGreedySelector(database, constraints)
+
     return selector.build_playlist(library, seed_track_id, target_duration_minutes)
