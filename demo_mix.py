@@ -6,9 +6,28 @@ import tempfile
 from pathlib import Path
 from src.autodj.db import Database
 from src.autodj.generate.playlist import generate
-import toml
 
-config = toml.load("/app/configs/autodj.toml")
+# Load config from file manually
+config_path = Path("/app/configs/autodj.toml") if Path("/app/configs/autodj.toml").exists() else Path("configs/autodj.toml")
+try:
+    import toml
+    config = toml.load(str(config_path))
+except ImportError:
+    # Minimal config without toml
+    config = {
+        "constraints": {
+            "bpm_tolerance_percent": 4.0,
+            "energy_window_size": 3,
+            "min_track_duration_seconds": 120,
+            "max_repeat_decay_hours": 168,
+        },
+        "render": {
+            "output_format": "mp3",
+            "mp3_bitrate": 192,
+            "crossfade_duration_seconds": 4.0,
+        }
+    }
+
 db = Database("/app/data/db/metadata.sqlite")
 db.connect()
 
