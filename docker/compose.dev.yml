@@ -33,6 +33,8 @@ services:
       - ../data/db:/app/data/db               # SQLite database
       - ../data/playlists:/app/data/playlists  # Generated playlists
       - ../data/mixes:/app/data/mixes         # Output mix files
+      # Music library (read-only)
+      - /srv/nas/shared:/srv/nas/shared:ro    # Music library mount
 
     # ==================== NETWORKING ====================
     # Loopback only (per workflow.md Rule: Network is busy)
