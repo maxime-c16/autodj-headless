@@ -17,6 +17,7 @@ from pathlib import Path
 from datetime import datetime
 import hashlib
 import os
+import gc
 
 # Add src/ to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -261,6 +262,10 @@ def main():
                 processed += 1
             else:
                 errors += 1
+
+            # Explicit garbage collection after each track to prevent memory buildup
+            # aubio/essentia can hold onto memory even after processing completes
+            gc.collect()
 
         # Get stats and log summary
         stats = db.get_stats()
