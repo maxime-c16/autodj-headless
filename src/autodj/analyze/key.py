@@ -86,13 +86,9 @@ def _essentia_detect_key(audio_path: str, config: dict) -> Optional[str]:
 
         logger.debug(f"Essentia result: key={key}, scale={scale}, confidence={confidence:.2f}")
 
-        # Parse key result (e.g., "A major" -> "A", "major")
-        parts = key.split()
-        if len(parts) != 2:
-            logger.warning(f"Unexpected key format: {key}")
-            return None
-
-        note, mode = parts[0], parts[1].lower()
+        # Use the key (note) and scale (mode) directly from essentia
+        note = key
+        mode = scale.lower()
 
         # Convert to Camelot
         mapping = STANDARD_TO_CAMELOT_MAJOR if mode == "major" else STANDARD_TO_CAMELOT_MINOR
