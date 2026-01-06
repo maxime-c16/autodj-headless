@@ -269,7 +269,7 @@ class TestPlaylistBuilding:
 
         assert len(playlist) <= 5
 
-    def test_build_playlist_deterministic(self, selector):
+    def test_build_playlist_deterministic(self, selector, mock_database):
         """Playlist is deterministic (same seed, same result)."""
         library = [
             {"id": "track-1", "bpm": 126.0, "key": "8B", "duration_seconds": 180},
@@ -278,20 +278,13 @@ class TestPlaylistBuilding:
         ]
 
         # Build twice with same seed
-        selector1 = MerlinGreedySelector(self.mock_database, selector.constraints)
+        selector1 = MerlinGreedySelector(mock_database, selector.constraints)
         playlist1 = selector1.build_playlist(library, "track-1", target_duration_minutes=10)
 
-        selector2 = MerlinGreedySelector(self.mock_database, selector.constraints)
+        selector2 = MerlinGreedySelector(mock_database, selector.constraints)
         playlist2 = selector2.build_playlist(library, "track-1", target_duration_minutes=10)
 
         assert playlist1 == playlist2
-
-    @pytest.fixture
-    def mock_database(self):
-        """Mock database."""
-        db = Mock()
-        db.get_recent_usage = Mock(return_value=[])
-        return db
 
 
 class TestSelectPlaylistFunction:
