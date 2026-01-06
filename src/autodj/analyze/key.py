@@ -81,9 +81,11 @@ def _essentia_detect_key(audio_path: str, config: dict, max_duration: float = 30
 
         logger.debug("Using essentia for key detection (memory-optimized)")
 
-        # Check file size - skip essentia for large files to avoid OOM
+        # Check file size - skip essentia for very large files to avoid OOM
+        # Note: essentia can handle large files (~100+ MB) but we limit to reasonable sizes
+        # Most audio files < 50MB should work fine
         file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-        if file_size_mb > 20:
+        if file_size_mb > 100:
             logger.debug(f"File too large ({file_size_mb:.1f}MB) - skipping essentia to avoid OOM")
             return None
 

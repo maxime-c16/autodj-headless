@@ -78,7 +78,7 @@ def _get_audio_duration(file_path: str) -> float:
 
 def _write_id3_tags(file_path: str, bpm: float = None, key: str = None) -> None:
     """
-    Write BPM and key to ID3 tags.
+    Write BPM and key to tags (ID3 for MP3, MP4 for M4A/ALAC).
 
     Args:
         file_path: Path to audio file.
@@ -87,20 +87,60 @@ def _write_id3_tags(file_path: str, bpm: float = None, key: str = None) -> None:
     """
     try:
         import mutagen
-        from mutagen.easyid3 import EasyID3
+        from pathlib import Path as PathlibPath
 
-        audio = EasyID3(file_path)
+        file_ext = PathlibPath(file_path).suffix.lower()
 
-        if bpm:
-            audio["bpm"] = str(int(bpm))
-        if key:
-            audio["key"] = key
+        if file_ext in [".m4a", ".mp4", ".aac"]:
+            # MP4/M4A tagging
+            from mutagen.mp4 import MP4
 
-        audio.save()
-        logger.debug(f"ID3 tags written for {Path(file_path).name}")
+            try:
+                audio = MP4(file_path)
+                if bpm:
+                    audio["\xa9cmt"] = [f"BPM: {int(bpm)}"]  # MP4 comment field
+                if key:
+                    audio["\xa9key"] = [key]  # Custom MP4 tag for key
+                audio.save()
+                logger.debug(f"MP4 tags written for {PathlibPath(file_path).name}")
+            except Exception as mp4_err:
+                logger.warning(f"Could not write MP4 tags to {file_path}: {mp4_err}")
+
+        elif file_ext in [".mp3"]:
+            # ID3 tagging for MP3
+            from mutagen.easyid3 import EasyID3
+
+            try:
+                audio = EasyID3(file_path)
+                if bpm:
+                    audio["bpm"] = str(int(bpm))
+                if key:
+                    audio["key"] = key
+                audio.save()
+                logger.debug(f"ID3 tags written for {PathlibPath(file_path).name}")
+            except Exception as id3_err:
+                logger.warning(f"Could not write ID3 tags to {file_path}: {id3_err}")
+
+        elif file_ext in [".flac"]:
+            # FLAC tagging
+            from mutagen.flac import FLAC
+
+            try:
+                audio = FLAC(file_path)
+                if bpm:
+                    audio["bpm"] = str(int(bpm))
+                if key:
+                    audio["key"] = key
+                audio.save()
+                logger.debug(f"FLAC tags written for {PathlibPath(file_path).name}")
+            except Exception as flac_err:
+                logger.warning(f"Could not write FLAC tags to {file_path}: {flac_err}")
+
+        else:
+            logger.debug(f"Unsupported format for tagging: {file_ext}")
 
     except Exception as e:
-        logger.warning(f"Could not write ID3 tags to {file_path}: {e}")
+        logger.warning(f"Tag writing failed for {file_path}: {e}")
 
 
 def discover_audio_files(library_path: str = "data/music") -> list:
@@ -243,25 +283,36 @@ def main():
             db.disconnect()
             return 0
 
+        # Filter to only files not yet analyzed
+        to_process = [f for f in audio_files if not db.get_track_by_path(str(f))]
+        total_to_process = len(to_process)
+        logger.info(f"Found {len(audio_files)} files, {total_to_process} pending analysis")
+
+        # Initialize progress
+        db.set_analysis_progress(total=total_to_process, processed=0)
+
         # Analyze each track
         processed = 0
         skipped = 0
         errors = 0
 
-        for file_path in audio_files:
-            # Check if already analyzed
+        for file_path in to_process:
+            # Re-check if analyzed (race-safe)
             existing = db.get_track_by_path(str(file_path))
             if existing:
                 logger.debug(f"Skipping (already analyzed): {Path(file_path).name}")
                 skipped += 1
+                db.update_analysis_progress(1)
                 continue
 
             # Analyze track
             success, metadata = analyze_track(str(file_path), db, config)
             if success:
                 processed += 1
+                db.update_analysis_progress(1)
             else:
                 errors += 1
+                db.update_analysis_progress(1)
 
             # Explicit garbage collection after each track to prevent memory buildup
             # aubio/essentia can hold onto memory even after processing completes

@@ -84,6 +84,14 @@ class Database:
     CREATE INDEX IF NOT EXISTS idx_tracks_key ON tracks(key);
     CREATE INDEX IF NOT EXISTS idx_playlist_track_id ON playlist_history(track_id);
     CREATE INDEX IF NOT EXISTS idx_playlist_used_at ON playlist_history(used_at);
+
+    -- Analysis progress: single-row state for analyzer
+    CREATE TABLE IF NOT EXISTS analysis_progress (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        total INTEGER NOT NULL DEFAULT 0,
+        processed INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+    );
     """
 
     def __init__(self, db_path: str = "data/db/metadata.sqlite"):
@@ -127,6 +135,13 @@ class Database:
                 "INSERT INTO schema_version (version, updated_at) VALUES (?, ?)",
                 (self.SCHEMA_VERSION, datetime.now(timezone.utc).isoformat()),
             )
+
+            # Initialize analysis_progress row (single row id=1)
+            cursor.execute(
+                "INSERT OR REPLACE INTO analysis_progress (id, total, processed, updated_at) VALUES (1, 0, 0, ?)",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+
             self.conn.commit()
             logger.info(f"✅ Database schema initialized (v{self.SCHEMA_VERSION})")
         else:
@@ -138,6 +153,27 @@ class Database:
                     f"Schema version mismatch: {current_version} < {self.SCHEMA_VERSION}. "
                     f"Consider running migration."
                 )
+
+            # Ensure analysis_progress table exists on older DBs (migration)
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='analysis_progress'"
+            )
+            if not cursor.fetchone():
+                logger.info("Adding missing analysis_progress table (migration)")
+                cursor.executescript(
+                    "CREATE TABLE IF NOT EXISTS analysis_progress (\n"
+                    "    id INTEGER PRIMARY KEY CHECK (id = 1),\n"
+                    "    total INTEGER NOT NULL DEFAULT 0,\n"
+                    "    processed INTEGER NOT NULL DEFAULT 0,\n"
+                    "    updated_at TEXT NOT NULL\n"
+                    ");\n"
+                )
+                cursor.execute(
+                    "INSERT OR REPLACE INTO analysis_progress (id, total, processed, updated_at) VALUES (1, 0, 0, ?)",
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+                self.conn.commit()
+
 
     def add_track(self, metadata: TrackMetadata) -> None:
         """
@@ -319,6 +355,37 @@ class Database:
             (track_id, playlist_id, position, datetime.now(timezone.utc).isoformat()),
         )
         self.conn.commit()
+
+    # ===== Analysis progress helpers =====
+    def set_analysis_progress(self, total: int, processed: int) -> None:
+        """Set the single-row analysis progress state."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO analysis_progress (id, total, processed, updated_at) VALUES (1, ?, ?, ?)",
+            (total, processed, datetime.now(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
+
+    def update_analysis_progress(self, processed_increment: int = 1) -> None:
+        """Increment the processed count by `processed_increment`."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE analysis_progress SET processed = processed + ?, updated_at = ? WHERE id = 1",
+            (processed_increment, datetime.now(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
+
+    def get_analysis_progress(self) -> dict:
+        """Return the analysis progress as a dict: {total, processed, updated_at}."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT total, processed, updated_at FROM analysis_progress WHERE id = 1")
+        row = cursor.fetchone()
+        if not row:
+            return {"total": 0, "processed": 0, "updated_at": None}
+        return {"total": row[0], "processed": row[1], "updated_at": row[2]}
 
     def get_recent_usage(self, track_id: str, hours_back: int = 168) -> List[Dict[str, Any]]:
         """
