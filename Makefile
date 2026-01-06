@@ -41,7 +41,7 @@ help:
 	@echo ""
 	@echo "  ⚡ WORKFLOW RULES"
 	@echo "    1. Never run multiple jobs simultaneously"
-	@echo "    2. Always use 'make' — never call docker compose directly"
+	@echo "    2. Always use 'make' — never call docker-compose directly"
 	@echo "    3. Rebuild only when dependencies change, not code"
 	@echo ""
 
@@ -49,14 +49,14 @@ help:
 
 dev-up:
 	@echo "📦 Starting dev container..."
-	docker compose -f $(DEV_COMPOSE) up -d
+	docker-compose -f $(DEV_COMPOSE) up -d
 	@echo "✅ Dev container running. Use 'make logs' to view output."
 	@echo ""
-	@docker compose -f $(DEV_COMPOSE) ps
+	@docker-compose -f $(DEV_COMPOSE) ps
 
 dev-down:
 	@echo "🛑 Stopping dev container..."
-	docker compose -f $(DEV_COMPOSE) down
+	docker-compose -f $(DEV_COMPOSE) down
 	@echo "✅ Dev container stopped."
 
 rebuild:
@@ -74,21 +74,21 @@ rebuild:
 analyze:
 	@echo "🔍 Running MIR analysis..."
 	@echo "📊 Per SPEC.md: Single file at a time, ≤30 sec per track, ≤512 MiB RAM"
-	docker compose -f $(DEV_COMPOSE) exec -T autodj \
+	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
 		python -m src.scripts.analyze_library
 	@echo "✅ Analysis complete."
 
 generate:
 	@echo "🎵 Generating DJ playlist & transition plan..."
 	@echo "📊 Per SPEC.md: ≤30 sec total, ≤512 MiB RAM"
-	docker compose -f $(DEV_COMPOSE) exec -T autodj \
+	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
 		python -m src.scripts.generate_set
 	@echo "✅ Playlist & transitions generated."
 
 render:
 	@echo "🎚️  Rendering offline mix..."
 	@echo "📊 Per SPEC.md: ≤7 min for 60-min mix, ≤512 MiB RAM"
-	docker compose -f $(DEV_COMPOSE) exec -T autodj \
+	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
 		python -m src.scripts.render_set
 	@echo "✅ Mix rendering complete. Check data/mixes/ for output."
 
@@ -96,25 +96,25 @@ render:
 
 clean:
 	@echo "🧹 Cleaning containers & volumes..."
-	docker compose -f $(DEV_COMPOSE) down -v
+	docker-compose -f $(DEV_COMPOSE) down -v
 	@echo "✅ Cleanup complete."
 
 logs:
 	@echo "📜 Tailing dev container logs (Ctrl+C to exit)..."
-	docker compose -f $(DEV_COMPOSE) logs -f --tail=50
+	docker-compose -f $(DEV_COMPOSE) logs -f --tail=50
 
 # ==================== VALIDATION ====================
 
 validate-config:
 	@echo "🔐 Validating configuration..."
-	docker compose -f $(DEV_COMPOSE) exec -T autodj \
+	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
 		python -c "from src.autodj.config import Config; c = Config.load(); print('✅ Config valid')"
 
 # ==================== INTERNAL TARGETS (not for direct use) ====================
 
 .PHONY: _check-container-running
 _check-container-running:
-	@if ! docker compose -f $(DEV_COMPOSE) ps | grep -q running; then \
+	@if ! docker-compose -f $(DEV_COMPOSE) ps | grep -q running; then \
 		echo "❌ Dev container not running. Run 'make dev-up' first."; \
 		exit 1; \
 	fi
