@@ -149,8 +149,15 @@ def analyze_track(
 
         # Get duration
         duration = _get_audio_duration(str(file_path))
-        if duration < config["constraints"].get("min_track_duration_seconds", 120):
+        min_duration = config["constraints"].get("min_track_duration_seconds", 120)
+        max_duration = config["constraints"].get("max_track_duration_seconds", 1200)
+
+        if duration < min_duration:
             logger.warning(f"Track too short ({duration:.1f}s), skipping")
+            return False, None
+
+        if duration > max_duration:
+            logger.warning(f"Track too long ({duration:.1f}s > {max_duration}s), skipping")
             return False, None
 
         # Detect BPM

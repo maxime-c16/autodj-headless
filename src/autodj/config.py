@@ -33,6 +33,7 @@ class Config:
             "bpm_tolerance_percent": (2.0, 10.0),
             "energy_window_size": (2, 5),
             "min_track_duration_seconds": (60, 300),
+            "max_track_duration_seconds": (300, 3600),
             "max_repeat_decay_hours": (24, 720),
         },
         "analysis": {
@@ -61,6 +62,7 @@ class Config:
             "bpm_tolerance_percent": 4.0,
             "energy_window_size": 3,
             "min_track_duration_seconds": 120,
+            "max_track_duration_seconds": 1200,  # 20 minutes
             "max_repeat_decay_hours": 168,
         },
         "analysis": {
