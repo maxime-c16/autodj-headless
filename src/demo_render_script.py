@@ -96,7 +96,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
         total_min = int(total_duration // 60)
         total_sec = int(total_duration % 60)
         print(f"\n⏱️  ACTUAL DURATION: {total_min}:{total_sec:02d} (target: 15:00)")
-        print(f"   Difference: {(total_duration - 900)//60:+d} minutes\n")
+        diff_minutes = int((total_duration - 900) // 60)
+        print(f"   Difference: {diff_minutes:+d} minutes\n")
 
         print(f"{'─'*90}")
         print(f"🔄 TRANSITION PLAN (Harmonic Mixing)")
