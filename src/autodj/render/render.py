@@ -156,30 +156,23 @@ def _generate_liquidsoap_script(
     script.append("")
 
     # ==================== SEQUENCE BUILD ====================
-    script.append("# Decode all tracks with ffmpeg")
+    script.append("# Create playlist file in memory")
+    script.append("# Note: In real deployment, this would be read from an M3U file")
+    script.append("# For now, we generate tracks directly")
+    script.append("")
+    script.append("# Build mix from playlist")
+    script.append("mix = playlist.once([")
 
     for idx, trans in enumerate(transitions):
         track_id = trans.get("track_id")
         file_path = trans.get("file_path", "")
         target_bpm = trans.get("target_bpm", 120.0)
 
-        script.append(f"# Track {idx + 1}: {track_id}")
-        script.append(f'track{idx+1} = mksafe(buffer(input.ffmpeg("{file_path}")))')
+        script.append(f'  "{file_path}",  # Track {idx + 1}: {track_id}')
 
-    script.append("")
-    script.append("# Build mix sequence")
-    script.append("tracks = [")
-    for idx in range(len(transitions)):
-        script.append(f"  track{idx+1},")
-    script.append("]")
-    script.append("")
-
-    # ==================== MIXING ====================
-    script.append("# Concatenate tracks")
-    script.append("mix = sequence(tracks)")
+    script.append("])")
     script.append("")
     script.append("# Note: Crossfade transitions will be added in future implementation")
-    script.append("# For now, using simple concatenation to get basic rendering working")
     script.append("")
 
     # ==================== OUTPUT ====================
