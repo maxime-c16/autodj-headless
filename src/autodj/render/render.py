@@ -14,6 +14,9 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 import json
+from datetime import datetime
+from mutagen.easyid3 import EasyID3
+from mutagen.flac import FLAC
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,7 @@ def render(
     Returns:
         True if successful, False otherwise
     """
+    script_path = None
     try:
         # Load transitions plan
         with open(transitions_json_path, "r") as f:
@@ -43,6 +47,9 @@ def render(
 
         # Generate Liquidsoap script
         script = _generate_liquidsoap_script(plan, output_path, config)
+        if not script:
+            logger.error("Failed to generate Liquidsoap script")
+            return False
 
         # Write to temp file
         with tempfile.NamedTemporaryFile(
@@ -62,17 +69,39 @@ def render(
 
         if result.returncode != 0:
             logger.error(f"Liquidsoap failed: {result.stderr}")
+            _cleanup_partial_output(output_path)
             return False
 
-        logger.info(f"Render complete: {output_path}")
+        # Validate output
+        if not _validate_output_file(output_path):
+            logger.error("Output file validation failed")
+            _cleanup_partial_output(output_path)
+            return False
+
+        # Add metadata to output
+        playlist_id = plan.get("playlist_id", "autodj-playlist")
+        timestamp = datetime.now().isoformat()
+        _write_mix_metadata(output_path, playlist_id, timestamp)
+
+        logger.info(f"✅ Render complete: {output_path}")
         return True
 
     except subprocess.TimeoutExpired:
         logger.error(f"Render timeout after {timeout_seconds} seconds")
+        _cleanup_partial_output(output_path)
         return False
     except Exception as e:
         logger.error(f"Render failed: {e}")
+        _cleanup_partial_output(output_path)
         return False
+    finally:
+        # Cleanup temp script
+        if script_path:
+            try:
+                Path(script_path).unlink()
+                logger.debug(f"Cleaned up temp script: {script_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp script {script_path}: {e}")
 
 
 def _generate_liquidsoap_script(
@@ -188,6 +217,114 @@ def _generate_liquidsoap_script(
     return "\n".join(script)
 
 
+def _validate_output_file(output_path: str) -> bool:
+    """
+    Validate rendered output file (SPEC.md § 10.3).
+
+    Args:
+        output_path: Path to output file
+
+    Returns:
+        True if valid, False otherwise
+    """
+    try:
+        output_file = Path(output_path)
+
+        # Check file exists
+        if not output_file.exists():
+            logger.error(f"Output file does not exist: {output_path}")
+            return False
+
+        # Check minimum size (1 MiB per SPEC.md § 10.3)
+        min_size_bytes = 1024 * 1024
+        file_size = output_file.stat().st_size
+        if file_size < min_size_bytes:
+            logger.error(f"Output file too small: {file_size} bytes (minimum {min_size_bytes})")
+            return False
+
+        logger.debug(f"Output validation passed: {output_path} ({file_size} bytes)")
+        return True
+
+    except Exception as e:
+        logger.error(f"Output validation failed: {e}")
+        return False
+
+
+def _write_mix_metadata(output_path: str, playlist_id: str, timestamp: str) -> bool:
+    """
+    Write ID3 metadata to output mix file (SPEC.md § 4.4).
+
+    Args:
+        output_path: Path to output file
+        playlist_id: Playlist identifier
+        timestamp: Generation timestamp (ISO format)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        output_file = Path(output_path)
+        if not output_file.exists():
+            logger.warning(f"Output file not found for metadata writing: {output_path}")
+            return False
+
+        year = timestamp[:4]  # Extract year from ISO timestamp
+        album_name = f"AutoDJ Mix {timestamp[:10]}"  # YYYY-MM-DD
+        genre = "DJ Mix"
+
+        # Handle MP3 files
+        if output_path.lower().endswith('.mp3'):
+            try:
+                audio = EasyID3(output_path)
+                audio['album'] = album_name
+                audio['genre'] = genre
+                audio['date'] = year
+                audio.save()
+                logger.debug(f"Added ID3 metadata to {output_path}")
+            except Exception as e:
+                logger.warning(f"Failed to write ID3 tags to MP3: {e}")
+                return False
+
+        # Handle FLAC files
+        elif output_path.lower().endswith('.flac'):
+            try:
+                audio = FLAC(output_path)
+                audio['album'] = album_name
+                audio['genre'] = genre
+                audio['date'] = year
+                audio.save()
+                logger.debug(f"Added VORBIS metadata to {output_path}")
+            except Exception as e:
+                logger.warning(f"Failed to write VORBIS tags to FLAC: {e}")
+                return False
+
+        else:
+            logger.debug(f"Unsupported format for metadata: {output_path}")
+            return False
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Metadata writing failed: {e}")
+        return False
+
+
+def _cleanup_partial_output(output_path: str) -> None:
+    """
+    Clean up partial or failed output files.
+
+    Args:
+        output_path: Path to output file to remove
+    """
+    try:
+        output_file = Path(output_path)
+        if output_file.exists():
+            output_file.unlink()
+            logger.debug(f"Cleaned up partial output: {output_path}")
+    except Exception as e:
+        logger.warning(f"Failed to clean up output file {output_path}: {e}")
+
+
 class RenderEngine:
     """Liquidsoap offline rendering orchestrator."""
 
@@ -221,6 +358,7 @@ class RenderEngine:
             True if successful, False otherwise
         """
         logger.info(f"Starting render: {output_path}")
+        script_path = None
 
         # Load transitions plan
         try:
@@ -274,20 +412,36 @@ class RenderEngine:
             if result.returncode != 0:
                 logger.error(f"Liquidsoap failed: {result.stderr}")
                 logger.debug(f"Script stdout: {result.stdout}")
+                _cleanup_partial_output(output_path)
                 return False
+
+            # Validate output
+            if not _validate_output_file(output_path):
+                logger.error("Output file validation failed")
+                _cleanup_partial_output(output_path)
+                return False
+
+            # Add metadata to output
+            playlist_id = plan.get("playlist_id", "autodj-playlist")
+            timestamp = datetime.now().isoformat()
+            _write_mix_metadata(output_path, playlist_id, timestamp)
 
             logger.info(f"✅ Render complete: {output_path}")
             return True
 
         except subprocess.TimeoutExpired:
             logger.error(f"Render timeout after {timeout_seconds} seconds")
+            _cleanup_partial_output(output_path)
             return False
         except Exception as e:
             logger.error(f"Render failed: {e}")
+            _cleanup_partial_output(output_path)
             return False
         finally:
             # Cleanup temp script
-            try:
-                Path(script_path).unlink()
-            except:
-                pass
+            if script_path:
+                try:
+                    Path(script_path).unlink()
+                    logger.debug(f"Cleaned up temp script: {script_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temp script {script_path}: {e}")

@@ -9,7 +9,13 @@ import json
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
-from autodj.render.render import _generate_liquidsoap_script, RenderEngine
+from autodj.render.render import (
+    _generate_liquidsoap_script,
+    _validate_output_file,
+    _write_mix_metadata,
+    _cleanup_partial_output,
+    RenderEngine,
+)
 
 
 @pytest.fixture
@@ -334,6 +340,122 @@ class TestRenderIntegration:
 
         assert "320" in script
         assert "8.0" in script
+
+
+class TestOutputValidation:
+    """Test output file validation."""
+
+    def test_validate_nonexistent_file(self):
+        """Validation fails for nonexistent files."""
+        result = _validate_output_file("/nonexistent/path/file.mp3")
+        assert result is False
+
+    def test_validate_file_too_small(self):
+        """Validation fails for files smaller than 1 MiB."""
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            temp_path = f.name
+            f.write(b"small")
+
+        try:
+            result = _validate_output_file(temp_path)
+            assert result is False
+        finally:
+            Path(temp_path).unlink()
+
+    def test_validate_large_file(self):
+        """Validation passes for large files."""
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            temp_path = f.name
+            # Write 2 MiB of data
+            f.write(b"x" * (2 * 1024 * 1024))
+
+        try:
+            result = _validate_output_file(temp_path)
+            assert result is True
+        finally:
+            Path(temp_path).unlink()
+
+
+class TestMetadataWriting:
+    """Test ID3 metadata writing."""
+
+    def test_write_metadata_nonexistent_file(self):
+        """Metadata writing fails for nonexistent files."""
+        result = _write_mix_metadata("/nonexistent/file.mp3", "test-id", "2026-01-06T10:00:00")
+        assert result is False
+
+    @patch("autodj.render.render.EasyID3")
+    def test_write_metadata_mp3(self, mock_easyid3):
+        """Metadata writing works for MP3 files."""
+        mock_instance = MagicMock()
+        mock_easyid3.return_value = mock_instance
+
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            temp_path = f.name
+            f.write(b"x" * (2 * 1024 * 1024))
+
+        try:
+            result = _write_mix_metadata(temp_path, "test-id", "2026-01-06T10:00:00")
+            assert result is True
+            # Verify metadata was set
+            mock_instance.__setitem__.assert_any_call("album", "AutoDJ Mix 2026-01-06")
+            mock_instance.__setitem__.assert_any_call("genre", "DJ Mix")
+            mock_instance.__setitem__.assert_any_call("date", "2026")
+            mock_instance.save.assert_called_once()
+        finally:
+            Path(temp_path).unlink()
+
+    @patch("autodj.render.render.FLAC")
+    def test_write_metadata_flac(self, mock_flac):
+        """Metadata writing works for FLAC files."""
+        mock_instance = MagicMock()
+        mock_flac.return_value = mock_instance
+
+        with tempfile.NamedTemporaryFile(suffix=".flac", delete=False) as f:
+            temp_path = f.name
+            f.write(b"x" * (2 * 1024 * 1024))
+
+        try:
+            result = _write_mix_metadata(temp_path, "test-id", "2026-01-06T10:00:00")
+            assert result is True
+            # Verify metadata was set
+            mock_instance.__setitem__.assert_any_call("album", "AutoDJ Mix 2026-01-06")
+            mock_instance.__setitem__.assert_any_call("genre", "DJ Mix")
+            mock_instance.__setitem__.assert_any_call("date", "2026")
+            mock_instance.save.assert_called_once()
+        finally:
+            Path(temp_path).unlink()
+
+    def test_write_metadata_unsupported_format(self):
+        """Metadata writing returns False for unsupported formats."""
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            temp_path = f.name
+            f.write(b"x" * (2 * 1024 * 1024))
+
+        try:
+            result = _write_mix_metadata(temp_path, "test-id", "2026-01-06T10:00:00")
+            assert result is False
+        finally:
+            Path(temp_path).unlink()
+
+
+class TestPartialCleanup:
+    """Test cleanup of partial output files."""
+
+    def test_cleanup_existing_file(self):
+        """Cleanup removes existing files."""
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            temp_path = f.name
+            f.write(b"partial")
+
+        assert Path(temp_path).exists()
+        _cleanup_partial_output(temp_path)
+        assert not Path(temp_path).exists()
+
+    def test_cleanup_nonexistent_file(self):
+        """Cleanup handles nonexistent files gracefully."""
+        # Should not raise an exception
+        _cleanup_partial_output("/nonexistent/file.mp3")
 
 
 if __name__ == "__main__":
