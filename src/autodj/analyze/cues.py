@@ -42,9 +42,22 @@ class CuePoints:
         return f"CuePoints(in={self.cue_in}, out={self.cue_out}, loop_start={self.loop_start})"
 
 
+def _snap_to_beat(sample_pos: int, bpm: float, sample_rate: int) -> int:
+    """Snap a sample position to the nearest beat boundary."""
+    samples_per_beat = int((60.0 / bpm) * sample_rate)
+    beat_number = round(sample_pos / samples_per_beat)
+    return int(beat_number * samples_per_beat)
+
+
 def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints]:
     """
-    Detect cue points from audio file using energy analysis + onset detection.
+    Detect cue points from audio file using energy analysis + beat alignment.
+
+    Algorithm:
+    1. Calculate RMS energy across the track
+    2. Find cue_in: First point where energy exceeds threshold (intro end)
+    3. Find cue_out: Last point before energy drops significantly (outro start)
+    4. Snap both to nearest beat boundary using BPM
 
     Args:
         audio_path: Path to audio file
@@ -56,19 +69,14 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
     """
     try:
         hop_size = config.get("aubio_hop_size", 512)
-        buf_size = config.get("aubio_buf_size", 4096)
 
         # Load audio
         logger.debug(f"Loading audio for cue detection: {audio_path}")
         source = aubio.source(audio_path, hop_size=hop_size)
         sample_rate = source.samplerate
 
-        # Create onset detector for cue-in detection
-        onset_detector = aubio.onset("energy", buf_size=buf_size, hop_size=hop_size)
-
-        # Process audio and collect onset/energy data
+        # Process audio and collect energy data
         energies = []
-        onsets = []
         frame_count = 0
         total_samples = 0
 
@@ -78,13 +86,8 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
                 break
 
             # Calculate frame energy (RMS)
-            frame_energy = np.sqrt(np.mean(samples ** 2))
+            frame_energy = float(np.sqrt(np.mean(samples ** 2)))
             energies.append(frame_energy)
-
-            # Detect onset
-            is_onset = onset_detector(samples)
-            if is_onset:
-                onsets.append(frame_count)
 
             frame_count += 1
             total_samples += num_read
@@ -96,57 +99,70 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
             logger.warning("Insufficient audio data for cue detection")
             return None
 
-        # Convert to numpy arrays for analysis
+        # Convert to numpy array and normalize
         energy_array = np.array(energies)
         energy_array = np.maximum(energy_array, 1e-6)  # Avoid log(0)
-        energy_db = 20 * np.log10(energy_array / energy_array.max())
 
-        # Calculate smoothed energy with moving average
-        window_size = max(1, len(energy_db) // 50)  # ~2% of track
-        smoothed_energy = np.convolve(energy_db, np.ones(window_size) / window_size, mode="same")
+        # Smooth with larger window for robust detection (~4 seconds)
+        window_frames = max(1, int(4 * sample_rate / hop_size))
+        smoothed = np.convolve(energy_array, np.ones(window_frames) / window_frames, mode="same")
 
-        # Find cue-in: first energetic peak or first onset
-        threshold = smoothed_energy.max() * 0.6  # 60% of max
-        above_threshold = np.where(smoothed_energy > threshold)[0]
+        # Normalize to 0-1 range
+        smoothed_norm = (smoothed - smoothed.min()) / (smoothed.max() - smoothed.min() + 1e-6)
+
+        # === CUE IN DETECTION ===
+        # Find first frame where energy exceeds 20% of normalized range
+        # This skips quiet intros
+        cue_in_threshold = 0.2
+        above_threshold = np.where(smoothed_norm > cue_in_threshold)[0]
 
         if len(above_threshold) > 0:
-            cue_in_frame = above_threshold[0]
-        elif len(onsets) > 0:
-            # Fallback: use first detected onset
-            cue_in_frame = onsets[0]
+            cue_in_frame = int(above_threshold[0])
         else:
-            # Last resort: start from beginning
             cue_in_frame = 0
 
-        # Find cue-out: energy drop in tail or use 95% of track
-        tail_start = max(0, int(len(smoothed_energy) * 0.8))
-        tail_energy = smoothed_energy[tail_start:]
+        # === CUE OUT DETECTION ===
+        # Find last frame where energy is above 15% (before outro fade)
+        cue_out_threshold = 0.15
+        above_out_threshold = np.where(smoothed_norm > cue_out_threshold)[0]
 
-        if len(tail_energy) > 10:
-            # Find where energy drops significantly
-            energy_diffs = np.diff(tail_energy)
-            # Find drops (negative differences)
-            drops = np.where(energy_diffs < -np.std(energy_diffs))[0]
-            if len(drops) > 0:
-                cue_out_frame = tail_start + drops[0]
-            else:
-                # If no clear drop, use 95% point
-                cue_out_frame = int(len(smoothed_energy) * 0.95)
+        if len(above_out_threshold) > 0:
+            cue_out_frame = int(above_out_threshold[-1])
         else:
-            cue_out_frame = len(smoothed_energy) - 1
+            cue_out_frame = len(smoothed_norm) - 1
 
-        # Ensure cue_out > cue_in
-        if cue_out_frame <= cue_in_frame:
-            cue_out_frame = len(smoothed_energy) - 1
+        # Ensure minimum track length (at least 30 seconds usable)
+        min_frames = int(30 * sample_rate / hop_size)
+        if cue_out_frame - cue_in_frame < min_frames:
+            # Reset to use most of the track
+            cue_in_frame = 0
+            cue_out_frame = len(smoothed_norm) - 1
 
-        # Convert frame indices to sample offsets
-        # Use int() to convert numpy types to native Python int for SQLite compatibility
-        cue_in_samples = int(cue_in_frame * hop_size)
-        cue_out_samples = int(min(cue_out_frame * hop_size, total_samples - 1))
+        # Convert to sample positions
+        cue_in_samples = cue_in_frame * hop_size
+        cue_out_samples = min(cue_out_frame * hop_size, total_samples - 1)
 
+        # Snap to beat boundaries for clean DJ transitions
+        if bpm > 0:
+            cue_in_samples = _snap_to_beat(cue_in_samples, bpm, sample_rate)
+            cue_out_samples = _snap_to_beat(cue_out_samples, bpm, sample_rate)
+
+        # Ensure cue_out > cue_in and within bounds
+        cue_in_samples = max(0, cue_in_samples)
+        cue_out_samples = min(cue_out_samples, total_samples - 1)
+
+        if cue_out_samples <= cue_in_samples:
+            cue_out_samples = total_samples - 1
+
+        # Convert to native Python int for SQLite compatibility
+        cue_in_samples = int(cue_in_samples)
+        cue_out_samples = int(cue_out_samples)
+
+        usable_duration = (cue_out_samples - cue_in_samples) / sample_rate
         logger.info(
-            f"✅ Cues detected: in={cue_in_samples}, out={cue_out_samples} "
-            f"(duration: {(cue_out_samples - cue_in_samples) / sample_rate:.1f}s)"
+            f"✅ Cues detected: in={cue_in_samples} ({cue_in_samples/sample_rate:.1f}s), "
+            f"out={cue_out_samples} ({cue_out_samples/sample_rate:.1f}s) "
+            f"[usable: {usable_duration:.1f}s]"
         )
 
         return CuePoints(
