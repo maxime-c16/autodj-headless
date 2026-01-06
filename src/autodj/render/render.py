@@ -159,15 +159,15 @@ def _generate_liquidsoap_script(
     # ==================== SEQUENCE BUILD ====================
     if m3u_path:
         script.append("# Load mix from M3U playlist file")
-        script.append(f'mix = playlist.once("{m3u_path}")')
+        script.append(f'mix = mksafe(playlist.once("{m3u_path}"))')
     else:
         script.append("# Create playlist from transition data")
-        script.append("mix = playlist.once([")
+        script.append("mix = mksafe(playlist.once([")
         for idx, trans in enumerate(transitions):
             track_id = trans.get("track_id")
             file_path = trans.get("file_path", "")
             script.append(f'  "{file_path}",  # Track {idx + 1}: {track_id}')
-        script.append("])")
+        script.append("]))")
 
     script.append("")
     script.append("# Note: Crossfade transitions will be added in future implementation")
