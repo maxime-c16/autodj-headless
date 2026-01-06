@@ -20,6 +20,12 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
+      # Restart policy (in deploy section for Swarm)
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 1
+        window: 120s
 
     # ==================== VOLUMES (immutable, no bind-mounts) ====================
     volumes:
@@ -49,14 +55,6 @@ services:
         max-size: "50m"
         max-file: "5"
         labels: "app=autodj,env=prod"
-
-    # ==================== RESTART POLICY ====================
-    # For scheduled jobs: restart only if fails unexpectedly
-    restart_policy:
-      condition: on-failure
-      delay: 10s
-      max_attempts: 1
-      window: 120s
 
     # ==================== NETWORKING ====================
     networks:

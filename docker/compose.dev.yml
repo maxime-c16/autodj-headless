@@ -83,10 +83,8 @@ services:
     # Read-only root filesystem (except /tmp, /run)
     read_only: false  # Need write access to /app/data
 
-    # Restart policy for failed jobs (but not for interactive dev)
-    restart_policy:
-      condition: on-failure
-      max_attempts: 0
+    # Restart policy: no auto-restart for interactive dev
+    restart: "no"
 
 # ==================== NAMED VOLUMES ====================
 # Persist data across container restarts
