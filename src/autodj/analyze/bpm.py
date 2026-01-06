@@ -45,30 +45,50 @@ def _normalize_bpm(bpm: float, target_range: Tuple[float, float] = (85, 175)) ->
     return bpm
 
 
-def _detect_bpm_essentia(audio_path: str) -> Optional[Tuple[float, float]]:
+def _detect_bpm_essentia(audio_path: str, max_duration: float = 60.0) -> Optional[Tuple[float, float]]:
     """
     Detect BPM using essentia's RhythmExtractor2013 (more accurate).
+
+    Memory-optimized: only analyzes first 60 seconds to stay within container limits.
+
+    Args:
+        audio_path: Path to audio file
+        max_duration: Maximum seconds to analyze (default 60s for memory efficiency)
 
     Returns:
         Tuple of (bpm, confidence) or None if failed
     """
     try:
         import essentia.standard as es
+        import numpy as np
 
         logger.debug("Using essentia RhythmExtractor2013...")
 
         # Load audio at 44100 Hz
-        audio = es.MonoLoader(filename=audio_path, sampleRate=44100)()
+        sample_rate = 44100
+        audio = es.MonoLoader(filename=audio_path, sampleRate=sample_rate)()
 
-        # Use multifeature method for best accuracy
-        rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
+        # Limit to max_duration seconds to avoid OOM (512MB container limit)
+        max_samples = int(max_duration * sample_rate)
+        if len(audio) > max_samples:
+            # Analyze middle portion (skip intro/outro which may have different tempo)
+            start_offset = min(len(audio) // 4, int(30 * sample_rate))  # Skip first 30s max
+            end_offset = start_offset + max_samples
+            if end_offset > len(audio):
+                end_offset = len(audio)
+                start_offset = max(0, end_offset - max_samples)
+            audio = audio[start_offset:end_offset]
+            logger.debug(f"Analyzing {len(audio)/sample_rate:.1f}s sample (offset {start_offset/sample_rate:.1f}s)")
+
+        # Use degara method (faster, lower memory than multifeature)
+        rhythm_extractor = es.RhythmExtractor2013(method="degara")
         bpm, beats, beats_confidence, _, beats_intervals = rhythm_extractor(audio)
 
         # Calculate overall confidence from beat confidences
         if len(beats_confidence) > 0:
-            confidence = float(sum(beats_confidence)) / len(beats_confidence)
+            confidence = float(np.mean(beats_confidence))
         else:
-            confidence = 0.0
+            confidence = 0.5  # Default confidence if no beats detected
 
         logger.debug(f"Essentia raw BPM: {bpm:.1f}, confidence: {confidence:.2f}")
 
