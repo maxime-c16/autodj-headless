@@ -219,7 +219,8 @@ class TestPhonemiusWithRealData:
             # Check M3U content
             m3u_content = Path(m3u_path).read_text()
             assert "#EXTM3U" in m3u_content, "Invalid M3U format"
-            assert ".mp3" in m3u_content or ".flac" in m3u_content, "No tracks in M3U"
+            # Library may have various formats (mp3, flac, m4a, etc)
+            assert "#EXT-INF" in m3u_content and len(m3u_content.split("\n")) > 3, "No tracks in M3U"
 
             # Check transitions JSON
             with open(trans_path) as f:
@@ -319,14 +320,18 @@ class TestRenderPipeline:
 
             # Create transitions with file paths
             library_dict = {t["id"]: t for t in library}
+            transitions_dicts = []
             for idx, trans in enumerate(transitions):
+                # Convert TransitionPlan to dict if needed
+                trans_dict = trans.to_dict() if hasattr(trans, 'to_dict') else trans
                 if idx < len(track_ids):
-                    trans["file_path"] = library_dict[track_ids[idx]]["file_path"]
+                    trans_dict["file_path"] = library_dict[track_ids[idx]]["file_path"]
+                transitions_dicts.append(trans_dict)
 
             # Create plan dict
             plan = {
                 "playlist_id": "test-render",
-                "transitions": transitions,
+                "transitions": transitions_dicts,
                 "mix_duration_seconds": 900,
             }
 
