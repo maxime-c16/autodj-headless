@@ -211,14 +211,14 @@ def _generate_liquidsoap_script(
     script.append("# Encode output")
     if output_format == "mp3":
         script.append(
-            f'output.file(format(%%mp3(bitrate={mp3_bitrate}, stereo=true)), "{output_path}", mix)'
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", mix)'
         )
     elif output_format == "flac":
-        script.append(f'output.file(format(%%flac), "{output_path}", mix)')
+        script.append(f'output.file(%flac, "{output_path}", mix)')
     else:
         logger.warning(f"Unknown output format: {output_format}, defaulting to MP3")
         script.append(
-            f'output.file(format(%%mp3(bitrate={mp3_bitrate}, stereo=true)), "{output_path}", mix)'
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", mix)'
         )
 
     script.append("")

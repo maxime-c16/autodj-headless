@@ -102,7 +102,7 @@ class TestLiquidsoapScriptGeneration:
         """Script generates MP3 output."""
         script = _generate_liquidsoap_script(sample_plan, "/tmp/mix.mp3", config)
 
-        assert "%%mp3" in script
+        assert "%mp3" in script
         assert "192" in script  # bitrate
 
     def test_script_flac_output(self, sample_plan, config):
@@ -110,7 +110,7 @@ class TestLiquidsoapScriptGeneration:
         config["render"]["output_format"] = "flac"
         script = _generate_liquidsoap_script(sample_plan, "/tmp/mix.flac", config)
 
-        assert "%%flac" in script
+        assert "%flac" in script
 
     def test_script_empty_transitions(self, config):
         """Script generation handles empty transitions."""
