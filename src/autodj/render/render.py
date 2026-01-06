@@ -167,10 +167,11 @@ def _generate_liquidsoap_script(
         script.append(f'track{idx+1} = input.ffmpeg("{file_path}")')
 
     script.append("")
-    script.append("# Build mix sequence")
+    script.append("# Normalize tracks and build mix sequence")
+    script.append("# Buffer each track to handle ffmpeg's internal latency")
     script.append("tracks = [")
     for idx in range(len(transitions)):
-        script.append(f"  track{idx+1},")
+        script.append(f"  buffer(track{idx+1}),")
     script.append("]")
     script.append("")
 
