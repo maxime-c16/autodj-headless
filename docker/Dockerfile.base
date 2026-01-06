@@ -91,7 +91,7 @@ RUN pip install --no-cache-dir --break-system-packages \
     'scipy>=1.10,<1.11' \
     \
     # Audio analysis
-    # Note: librosa is heavy (RAM); use essentia or aubio instead for lightweight analysis
+    'aubio>=0.4.9' \
     'essentia>=2.1b5' \
     'mutagen>=1.46' \
     'audioread>=3.1' \
