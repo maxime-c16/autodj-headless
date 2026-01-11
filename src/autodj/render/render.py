@@ -238,18 +238,22 @@ def _generate_liquidsoap_script(
         script.append(f"{track_var} = once({track_var})")
         script.append("")
 
-    # ==================== CROSSFADE SEQUENCE ====================
-    script.append("# Chain tracks with crossfades")
+    # ==================== TRACK SEQUENCE ====================
+    script.append("# Chain tracks in sequence")
     if len(track_vars) == 1:
-        # Single track, no crossfades needed
-        script.append(f"sequence = {track_vars[0]}")
+        # Single track
+        script.append(f"sequence = mksafe({track_vars[0]})")
     else:
-        # Multiple tracks: chain with cross() operator
-        script.append(f"sequence = {track_vars[0]}")
-        for idx in range(1, len(track_vars)):
-            script.append(
-                f"sequence = cross(duration={crossfade_duration}, crossfade_transition, sequence([sequence, {track_vars[idx]}]))"
-            )
+        # Multiple tracks: use sequence() to concatenate
+        # Note: Full crossfade implementation coming in future version
+        script.append("# Build track sequence")
+        script.append(f"sequence = mksafe(sequence([")
+        for idx, track_var in enumerate(track_vars):
+            if idx == len(track_vars) - 1:
+                script.append(f"  {track_var}")
+            else:
+                script.append(f"  {track_var},")
+        script.append("]))")
 
     script.append("")
 

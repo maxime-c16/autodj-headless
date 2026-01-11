@@ -62,6 +62,9 @@ crossfade_duration_seconds = 4.0
 # "high" = slower but better quality (preserves transients)
 time_stretch_quality = "high"
 
+# Render timeout in seconds (per SPEC.md: max 420 sec for 60-min mix)
+timeout_seconds = 420
+
 # Enable LADSPA EQ in transitions (requires ladspa installed)
 enable_ladspa_eq = false
 
@@ -70,8 +73,11 @@ enable_ladspa_eq = false
 # Music library mount point (read-only expected)
 library_path = "/music"
 
+# Playlists directory (generated M3U and transitions.json)
+playlists_path = "data/playlists"
+
 # Output mixes directory (writable)
-mixes_output_path = "/music/autodj-mixes"
+mixes_path = "data/mixes"
 
 # Database path
 database_path = "data/db/metadata.sqlite"

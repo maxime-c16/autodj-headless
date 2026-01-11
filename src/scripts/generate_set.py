@@ -137,7 +137,7 @@ def main():
 
         result = generate(
             library=library,
-            config=config,
+            config=config.data,  # Pass underlying dict, not Config object
             output_dir=str(output_dir),
             target_duration_minutes=target_duration,
             seed_track_id=seed_track_id,

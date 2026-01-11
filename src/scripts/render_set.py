@@ -93,7 +93,7 @@ def main():
         success = render(
             transitions_json_path=str(latest_transitions),
             output_path=str(output_path),
-            config=config,
+            config=config.data,  # Pass underlying dict, not Config object
             timeout_seconds=config["render"].get("timeout_seconds", 420),
         )
 
