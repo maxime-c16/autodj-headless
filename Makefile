@@ -81,7 +81,12 @@ analyze:
 generate:
 	@echo "🎵 Generating DJ playlist & transition plan..."
 	@echo "📊 Per SPEC.md: ≤30 sec total, ≤512 MiB RAM"
-	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
+	@echo ""
+	@echo "💡 Tip: You can specify a seed track with:"
+	@echo "   SEED_TRACK_PATH=/path/to/track.mp3 make generate"
+	@echo "   SEED_TRACK_ID=track_id_hex make generate"
+	@echo ""
+	docker-compose -f $(DEV_COMPOSE) exec -T -e SEED_TRACK_PATH="$(SEED_TRACK_PATH)" -e SEED_TRACK_ID="$(SEED_TRACK_ID)" autodj \
 		python -m src.scripts.generate_set
 	@echo "✅ Playlist & transitions generated."
 

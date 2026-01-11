@@ -113,33 +113,60 @@ def render(
                 logger.warning(f"Failed to clean up temp script {script_path}: {e}")
 
 
+def _frames_to_seconds(frames: Optional[int], sample_rate: int = 44100) -> float:
+    """Convert frame offset to seconds."""
+    if frames is None or frames == 0:
+        return 0.0
+    return float(frames) / sample_rate
+
+
+def _calculate_stretch_ratio(
+    native_bpm: Optional[float], target_bpm: Optional[float]
+) -> float:
+    """
+    Calculate time-stretch ratio for BPM matching.
+
+    Args:
+        native_bpm: Track's detected BPM
+        target_bpm: Target BPM for rendering
+
+    Returns:
+        Stretch ratio (1.0 = no change, >1.0 = faster, <1.0 = slower)
+    """
+    if native_bpm is None or target_bpm is None or native_bpm == 0:
+        return 1.0
+    ratio = target_bpm / native_bpm
+    # Clamp to reasonable range (±8% per SPEC.md BPM tolerance)
+    ratio = max(0.92, min(1.08, ratio))
+    return ratio
+
+
 def _generate_liquidsoap_script(
     plan: dict, output_path: str, config: dict, m3u_path: str = ""
 ) -> str:
     """
-    Generate Liquidsoap offline mixing script.
+    Generate Liquidsoap offline mixing script with advanced DSP.
 
     Per SPEC.md § 5.3:
     - Offline clock (no real-time sync)
     - Streaming decode/encode
     - Memory-bounded
-    - Transitions: smart_crossfade with optional effects
+    - Transitions: crossfades with cue points and BPM time-stretching
 
     Args:
-        plan: Transitions plan dict
+        plan: Transitions plan dict with transitions list
         output_path: Path to output file
-        config: Render config
-        m3u_path: Path to M3U playlist file (optional)
+        config: Render config (output format, bitrate, crossfade duration)
+        m3u_path: Path to M3U playlist file (optional, for file path reference)
 
     Returns:
         Liquidsoap script as string
     """
     output_format = config.get("render", {}).get("output_format", "mp3")
     mp3_bitrate = config.get("render", {}).get("mp3_bitrate", 192)
-    time_stretch_quality = config.get("render", {}).get("time_stretch_quality", "high")
+    crossfade_duration = config.get("render", {}).get("crossfade_duration_seconds", 4.0)
 
     transitions = plan.get("transitions", [])
-    crossfade_duration = config.get("render", {}).get("crossfade_duration_seconds", 4.0)
 
     if not transitions:
         logger.error("No transitions in plan")
@@ -150,41 +177,94 @@ def _generate_liquidsoap_script(
 
     # ==================== SETTINGS ====================
     script.append("# AutoDJ-Headless Offline Mix")
-    script.append("# Generated Liquidsoap script for offline rendering")
+    script.append("# Generated Liquidsoap script for DJ-quality mixing")
+    script.append("# Features: Cue points, BPM time-stretching, beatmatched crossfades")
     script.append("")
     script.append("# Offline clock (no real-time sync)")
     script.append('set("clock.sync", false)')
+    script.append('set("frame.video.samplerate", 44100)')
     script.append("")
 
-    # ==================== SEQUENCE BUILD ====================
-    if m3u_path:
-        script.append("# Load mix from M3U playlist file")
-        script.append(f'mix = mksafe(playlist.once("{m3u_path}"))')
+    # ==================== HELPER FUNCTIONS ====================
+    script.append("# Crossfade transition function")
+    script.append("def crossfade_transition(a, b) =")
+    script.append(f"  # Linear fade-in/fade-out crossfade ({crossfade_duration}s)")
+    script.append(f"  fade_in = fade.in(duration={crossfade_duration}, b)")
+    script.append(f"  fade_out = fade.out(duration={crossfade_duration}, a)")
+    script.append("  add(normalize=false, [fade_in, fade_out])")
+    script.append("end")
+    script.append("")
+
+    # ==================== TRACK SEQUENCE BUILD ====================
+    script.append("# Build track sequence with cue points and time-stretching")
+    script.append("")
+
+    # Generate individual track definitions
+    track_vars = []
+    for idx, trans in enumerate(transitions):
+        track_var = f"track_{idx}"
+        track_vars.append(track_var)
+
+        file_path = trans.get("file_path", "")
+        track_id = trans.get("track_id", f"unknown_{idx}")
+        native_bpm = trans.get("bpm")
+        target_bpm = trans.get("target_bpm", native_bpm)
+        cue_in_frames = trans.get("cue_in_frames", 0)
+        cue_out_frames = trans.get("cue_out_frames")
+
+        # Convert frames to seconds
+        cue_in_sec = _frames_to_seconds(cue_in_frames)
+        cue_out_sec = _frames_to_seconds(cue_out_frames)
+
+        # Calculate stretch ratio for BPM matching
+        stretch_ratio = _calculate_stretch_ratio(native_bpm, target_bpm)
+
+        # Build track with processing pipeline
+        script.append(f"# Track {idx + 1}: {track_id}")
+        script.append(f"#   Native BPM: {native_bpm}, Target BPM: {target_bpm}, Stretch: {stretch_ratio:.3f}")
+        script.append(f"{track_var} = single(\"{file_path}\")")
+
+        # Apply cue points (trim if cue_out is set)
+        if cue_out_sec > 0:
+            script.append(f"{track_var} = trim(start={cue_in_sec:.3f}, stop={cue_out_sec:.3f}, {track_var})")
+        elif cue_in_sec > 0:
+            script.append(f"{track_var} = trim(start={cue_in_sec:.3f}, {track_var})")
+
+        # Apply time-stretching for BPM matching
+        if stretch_ratio != 1.0:
+            script.append(f"{track_var} = stretch(ratio={stretch_ratio:.3f}, {track_var})")
+
+        # Wrap in once() to ensure single playback
+        script.append(f"{track_var} = once({track_var})")
+        script.append("")
+
+    # ==================== CROSSFADE SEQUENCE ====================
+    script.append("# Chain tracks with crossfades")
+    if len(track_vars) == 1:
+        # Single track, no crossfades needed
+        script.append(f"sequence = {track_vars[0]}")
     else:
-        script.append("# Create playlist from transition data")
-        script.append("mix = mksafe(playlist.once([")
-        for idx, trans in enumerate(transitions):
-            track_id = trans.get("track_id")
-            file_path = trans.get("file_path", "")
-            script.append(f'  "{file_path}",  # Track {idx + 1}: {track_id}')
-        script.append("]))")
+        # Multiple tracks: chain with cross() operator
+        script.append(f"sequence = {track_vars[0]}")
+        for idx in range(1, len(track_vars)):
+            script.append(
+                f"sequence = cross(duration={crossfade_duration}, crossfade_transition, sequence([sequence, {track_vars[idx]}]))"
+            )
 
     script.append("")
-    script.append("# Note: Crossfade transitions will be added in future implementation")
-    script.append("")
 
-    # ==================== OUTPUT ====================
-    script.append("# Encode output")
+    # ==================== OUTPUT ENCODING ====================
+    script.append("# Encode and output")
     if output_format == "mp3":
         script.append(
-            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", mix)'
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", sequence)'
         )
     elif output_format == "flac":
-        script.append(f'output.file(%flac, "{output_path}", mix)')
+        script.append(f'output.file(%flac, "{output_path}", sequence)')
     else:
         logger.warning(f"Unknown output format: {output_format}, defaulting to MP3")
         script.append(
-            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", mix)'
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", sequence)'
         )
 
     script.append("")
