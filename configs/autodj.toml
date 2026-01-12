@@ -62,9 +62,6 @@ crossfade_duration_seconds = 4.0
 # "high" = slower but better quality (preserves transients)
 time_stretch_quality = "high"
 
-# Render timeout in seconds (per SPEC.md: max 420 sec for 60-min mix)
-timeout_seconds = 420
-
 # Enable LADSPA EQ in transitions (requires ladspa installed)
 enable_ladspa_eq = false
 

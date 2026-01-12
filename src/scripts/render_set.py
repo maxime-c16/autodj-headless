@@ -94,7 +94,7 @@ def main():
             transitions_json_path=str(latest_transitions),
             output_path=str(output_path),
             config=config.data,  # Pass underlying dict, not Config object
-            timeout_seconds=config["render"].get("timeout_seconds", 420),
+            timeout_seconds=None,  # No timeout - let render run as long as needed
         )
 
         elapsed_time = time.time() - start_time

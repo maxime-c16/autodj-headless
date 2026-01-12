@@ -25,7 +25,7 @@ def render(
     transitions_json_path: str,
     output_path: str,
     config: dict,
-    timeout_seconds: int = 420,  # 7 minutes per SPEC.md § 6.3
+    timeout_seconds: Optional[int] = None,  # No timeout (None = unlimited)
 ) -> bool:
     """
     Execute Liquidsoap rendering.
@@ -34,7 +34,7 @@ def render(
         transitions_json_path: Path to transitions.json
         output_path: Path to output mix file
         config: Render config dict
-        timeout_seconds: Max runtime (default 420 sec = 7 min)
+        timeout_seconds: Max runtime in seconds (None = no timeout)
 
     Returns:
         True if successful, False otherwise
