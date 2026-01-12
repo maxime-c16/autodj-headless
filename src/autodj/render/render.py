@@ -402,7 +402,7 @@ class RenderEngine:
         transitions_json_path: str,
         playlist_m3u_path: str,
         output_path: str,
-        timeout_seconds: int = 420,
+        timeout_seconds: Optional[int] = None,
     ) -> bool:
         """
         Render playlist to final mix.
@@ -411,7 +411,7 @@ class RenderEngine:
             transitions_json_path: Path to transitions.json
             playlist_m3u_path: Path to playlist.m3u (for track reference)
             output_path: Output mix file path
-            timeout_seconds: Max render time
+            timeout_seconds: Max render time in seconds (None = no timeout)
 
         Returns:
             True if successful, False otherwise
