@@ -12,11 +12,18 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable, List
 import json
 from datetime import datetime
 from mutagen.easyid3 import EasyID3
 from mutagen.flac import FLAC
+import os
+import threading
+import time
+import shutil
+from subprocess import PIPE, STDOUT, Popen
+
+from autodj.render.segmenter import RenderSegmenter, SegmentPlan
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,26 @@ def render(
         with open(transitions_json_path, "r") as f:
             plan = json.load(f)
 
+        # Preflight: ensure each transition has a valid file path
+        missing = []
+        for idx, t in enumerate(plan.get("transitions", [])):
+            fp = t.get("file_path")
+            if not fp:
+                missing.append((idx, fp, "missing path"))
+                continue
+            try:
+                p = Path(fp)
+                if not p.exists():
+                    missing.append((idx, fp, "not found"))
+            except Exception:
+                missing.append((idx, fp, "invalid path"))
+
+        if missing:
+            logger.error("Preflight check failed: some tracks missing or unreadable")
+            for m in missing:
+                logger.error(f" Transition {m[0]}: {m[1]} -> {m[2]}")
+            return False
+
         # Generate Liquidsoap script
         script = _generate_liquidsoap_script(plan, output_path, config)
         if not script:
@@ -63,23 +90,63 @@ def render(
         debug_script_path.write_text(script)
         logger.info(f"Debug script saved to: {debug_script_path}")
 
-        # Execute Liquidsoap
+        # Execute Liquidsoap and stream logs to file & logger
         logger.info(f"Starting Liquidsoap render: {output_path}")
         logger.debug(f"Script ({len(script.split(chr(10)))} lines):\n{script[:500]}...")
-        result = subprocess.run(
-            ["liquidsoap", script_path],
-            timeout=timeout_seconds,
-            capture_output=True,
-            text=True,
-        )
 
-        if result.returncode != 0:
-            logger.error(f"Liquidsoap failed with return code {result.returncode}")
-            logger.error(f"Liquidsoap stderr: {result.stderr if result.stderr else '(no stderr)'}")
-            logger.error(f"Liquidsoap stdout: {result.stdout if result.stdout else '(no stdout)'}")
+        # Ensure logs directory
+        log_dir = os.environ.get("AUTODJ_LOG_DIR", "/app/data/logs")
+        try:
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            logger.debug(f"Could not create log dir: {log_dir}")
+
+        liquidsoap_log_path = Path(log_dir) / f"liquidsoap-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.log"
+
+        # Start Liquidsoap process and stream stdout/stderr
+        proc = Popen(["liquidsoap", script_path], stdout=PIPE, stderr=STDOUT, text=True)
+
+        start_time = time.time()
+
+        # Thread: stream process output to log file and logger
+        def _stream_proc_output(p, logfile_path):
+            try:
+                with open(logfile_path, "a", encoding="utf-8") as lf:
+                    while True:
+                        line = p.stdout.readline()
+                        if not line:
+                            break
+                        lf.write(line)
+                        lf.flush()
+                        logger.info(f"[liquidsoap] {line.rstrip()}")
+            except Exception as e:
+                logger.warning(f"Error streaming liquidsoap output: {e}")
+
+        t = threading.Thread(target=_stream_proc_output, args=(proc, str(liquidsoap_log_path)), daemon=True)
+        t.start()
+
+        # Heartbeat: log elapsed time and output file size periodically
+        while True:
+            if proc.poll() is not None:
+                break
+            elapsed = time.time() - start_time
+            try:
+                size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+            except Exception:
+                size = 0
+            logger.debug(f"Render running: elapsed={elapsed:.1f}s, out_size={size} bytes")
+            time.sleep(5)
+
+        # Wait for streaming thread to finish
+        t.join(timeout=2)
+
+        if proc.returncode != 0:
+            logger.error(f"Liquidsoap failed with return code {proc.returncode}")
             logger.error(f"Debug script saved to: {debug_script_path}")
+            logger.error(f"Liquidsoap log: {liquidsoap_log_path}")
             _cleanup_partial_output(output_path)
             return False
+
 
         # Validate output
         if not _validate_output_file(output_path):
@@ -111,6 +178,304 @@ def render(
                 logger.debug(f"Cleaned up temp script: {script_path}")
             except Exception as e:
                 logger.warning(f"Failed to clean up temp script {script_path}: {e}")
+
+
+def render_segmented(
+    transitions_json_path: str,
+    output_path: str,
+    config: dict,
+    progress_callback: Optional[Callable] = None,
+) -> bool:
+    """
+    Render large mix in segments to reduce memory usage.
+
+    For mixes with >max_tracks_before_segment tracks, splits into segments
+    to keep peak RAM ≤200 MiB per segment instead of 512+ MiB for full mix.
+
+    Args:
+        transitions_json_path: Path to transitions.json
+        output_path: Final output path
+        config: Render config dict
+        progress_callback: Optional callback(segment_idx, total_segments, status)
+                          status: "rendering", "completed", "concatenating"
+
+    Returns:
+        True if successful, False otherwise
+    """
+    temp_dir = None
+    segment_files = []
+
+    try:
+        # Load transitions
+        with open(transitions_json_path) as f:
+            plan = json.load(f)
+
+        transitions = plan.get("transitions", [])
+
+        # Check if segmentation needed
+        max_tracks_before_segment = config.get("render", {}).get(
+            "max_tracks_before_segment", 10
+        )
+
+        segmenter = RenderSegmenter()
+        should_segment = segmenter.should_segment(
+            transitions, max_tracks_before_segment
+        )
+
+        if not should_segment:
+            # Small mix, render normally
+            logger.info(
+                f"Mix has {len(transitions)} tracks, "
+                f"rendering without segmentation"
+            )
+            return render(transitions_json_path, output_path, config)
+
+        logger.info(
+            f"Large mix detected ({len(transitions)} tracks), "
+            f"using segmented rendering"
+        )
+
+        # Split into segments
+        segment_size = config.get("render", {}).get("segment_size", 5)
+        segments = segmenter.split_transitions(transitions, segment_size)
+
+        if not segments:
+            logger.error("Failed to create segments")
+            return False
+
+        logger.info(f"Split into {len(segments)} segments")
+
+        # Create temp directory for segment files
+        temp_dir = Path(tempfile.mkdtemp(prefix="autodj_segments_"))
+        logger.debug(f"Created temp directory: {temp_dir}")
+
+        # Render each segment
+        for segment in segments:
+            # Progress callback
+            if progress_callback:
+                progress_callback(segment.segment_index, len(segments), "rendering")
+
+            # Generate segment-specific output
+            segment_output = temp_dir / f"segment_{segment.segment_index}.mp3"
+
+            success = _render_segment(
+                segment=segment,
+                plan=plan,
+                output_path=str(segment_output),
+                config=config,
+            )
+
+            if not success:
+                logger.error(f"Segment {segment.segment_index} rendering failed")
+                return False
+
+            segment_files.append(segment_output)
+
+            # Progress callback
+            if progress_callback:
+                progress_callback(segment.segment_index, len(segments), "completed")
+
+        # Concatenate segments with crossfade blending
+        if progress_callback:
+            progress_callback(len(segments), len(segments), "concatenating")
+
+        logger.info(f"Concatenating {len(segment_files)} segments...")
+        success = _concatenate_segments(
+            segment_files=segment_files,
+            output_path=output_path,
+            crossfade_duration=config.get("render", {}).get(
+                "crossfade_duration_seconds", 4.0
+            ),
+        )
+
+        if not success:
+            logger.error("Segment concatenation failed")
+            return False
+
+        # Validate final output
+        if not _validate_output_file(output_path):
+            logger.error("Final output validation failed")
+            return False
+
+        # Write metadata to final output
+        playlist_id = plan.get("playlist_id", "autodj-playlist")
+        timestamp = datetime.now().isoformat()
+        _write_mix_metadata(output_path, playlist_id, timestamp)
+
+        logger.info(f"✅ Segmented render complete: {output_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Segmented render failed: {e}")
+        return False
+
+    finally:
+        # Cleanup temporary segments
+        if temp_dir:
+            try:
+                shutil.rmtree(temp_dir)
+                logger.debug(f"Cleaned up temp directory: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp directory: {e}")
+
+
+def _render_segment(
+    segment: SegmentPlan,
+    plan: dict,
+    output_path: str,
+    config: dict,
+) -> bool:
+    """
+    Render a single segment to MP3.
+
+    Args:
+        segment: SegmentPlan describing this segment
+        plan: Original transitions plan (for metadata)
+        output_path: Output file path for this segment
+        config: Render config dict
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        logger.info(
+            f"Rendering segment {segment.segment_index}: "
+            f"tracks {segment.track_start_idx}-{segment.track_end_idx}"
+        )
+
+        # Generate segment-specific transitions JSON
+        segment_plan = {
+            "playlist_id": f"segment_{segment.segment_index}",
+            "mix_duration_seconds": segment.estimated_duration_sec,
+            "generated_at": datetime.utcnow().isoformat(),
+            "transitions": segment.transitions,
+        }
+
+        # Write to temp JSON file
+        segment_json = (
+            Path(output_path).parent / f"segment_{segment.segment_index}.json"
+        )
+        with open(segment_json, "w") as f:
+            json.dump(segment_plan, f, indent=2)
+
+        # Render segment using existing render() function
+        success = render(
+            transitions_json_path=str(segment_json),
+            output_path=output_path,
+            config=config,
+            timeout_seconds=None,  # No timeout for segments
+        )
+
+        # Cleanup temp JSON
+        try:
+            segment_json.unlink()
+        except Exception:
+            pass
+
+        return success
+
+    except Exception as e:
+        logger.error(f"Segment {segment.segment_index} render failed: {e}")
+        return False
+
+
+def _concatenate_segments(
+    segment_files: List[Path],
+    output_path: str,
+    crossfade_duration: float = 4.0,
+) -> bool:
+    """
+    Concatenate segment MP3 files with crossfade blending.
+
+    Uses ffmpeg with acrossfade filter for smooth transitions at boundaries.
+
+    Args:
+        segment_files: List of segment MP3 file paths
+        output_path: Output path for concatenated mix
+        crossfade_duration: Duration of crossfade blend in seconds
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        if not segment_files:
+            logger.error("No segment files to concatenate")
+            return False
+
+        if len(segment_files) == 1:
+            # Single segment, just copy
+            logger.debug("Single segment, copying to output")
+            shutil.copy(segment_files[0], output_path)
+            return True
+
+        logger.info(
+            f"Concatenating {len(segment_files)} segments "
+            f"with {crossfade_duration}s crossfade"
+        )
+
+        # Build ffmpeg command with acrossfade filter
+        cmd = ["ffmpeg", "-y"]  # Overwrite output
+
+        # Add input files
+        for seg_file in segment_files:
+            cmd.extend(["-i", str(seg_file)])
+
+        # Build filter complex for progressive crossfades
+        # [0][1]acrossfade=d=4[a01]; [a01][2]acrossfade=d=4[a012]; ...
+        filter_parts = []
+
+        if len(segment_files) == 2:
+            # Simple 2-segment case
+            filter_complex = (
+                f"[0][1]acrossfade=d={crossfade_duration}:c1=tri:c2=tri"
+            )
+        else:
+            # Multiple segments: chain crossfades
+            prev_label = "[0]"
+            for i in range(1, len(segment_files)):
+                curr_label = f"[{i}]"
+                out_label = (
+                    f"[a{i}]" if i < len(segment_files) - 1 else ""
+                )
+
+                filter_parts.append(
+                    f"{prev_label}{curr_label}acrossfade="
+                    f"d={crossfade_duration}:c1=tri:c2=tri{out_label}"
+                )
+
+                if i < len(segment_files) - 1:
+                    prev_label = f"[a{i}]"
+
+            filter_complex = ";".join(filter_parts)
+
+        cmd.extend(["-filter_complex", filter_complex])
+
+        # Output encoding
+        cmd.extend(["-c:a", "libmp3lame", "-b:a", "192k", output_path])
+
+        logger.debug(f"ffmpeg filter: {filter_complex}")
+
+        # Execute ffmpeg
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 minutes max for concatenation
+        )
+
+        if result.returncode != 0:
+            logger.error(f"ffmpeg concatenation failed: {result.stderr}")
+            return False
+
+        logger.info("✅ Segment concatenation complete")
+        return True
+
+    except subprocess.TimeoutExpired:
+        logger.error("ffmpeg concatenation timeout (10 min)")
+        return False
+    except Exception as e:
+        logger.error(f"Segment concatenation error: {e}")
+        return False
 
 
 def _frames_to_seconds(frames: Optional[int], sample_rate: int = 44100) -> float:

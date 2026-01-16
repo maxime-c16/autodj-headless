@@ -20,7 +20,8 @@ import time
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from autodj.config import Config
-from autodj.render.render import render
+from autodj.render.render import render, render_segmented
+from autodj.render.progress import get_progress_tracker
 
 # Configure logging
 logging.basicConfig(
@@ -60,13 +61,20 @@ def main():
         latest_transitions = transition_files[0]
         logger.info(f"Found latest transitions: {latest_transitions}")
 
-        # Find matching m3u file (same timestamp prefix)
-        stem = latest_transitions.stem.replace(".transitions", "")
-        m3u_files = list(playlists_dir.glob(f"{stem}*.m3u"))
+        # Find matching m3u file (same timestamp as transitions)
+        # transitions filename: transitions-<ts>.json -> playlist filename: playlist-<ts>.m3u
+        ts = latest_transitions.name.replace("transitions-", "").replace(".json", "")
+        expected_name = f"playlist-{ts}"
+        m3u_files = list(playlists_dir.glob(f"{expected_name}*.m3u"))
 
         if not m3u_files:
-            logger.warning(f"No matching M3U file found for {stem}")
-            latest_m3u = None
+            logger.warning(f"No matching M3U file found for {latest_transitions.name}; attempting fallback to newest M3U")
+            m3u_candidates = sorted(playlists_dir.glob("*.m3u"), key=lambda p: p.stat().st_mtime, reverse=True)
+            latest_m3u = m3u_candidates[0] if m3u_candidates else None
+            if latest_m3u:
+                logger.info(f"Falling back to newest playlist: {latest_m3u}")
+            else:
+                logger.warning(f"No M3U files available in {playlists_dir}")
         else:
             latest_m3u = m3u_files[0]
             logger.info(f"Found matching playlist: {latest_m3u}")
@@ -86,16 +94,52 @@ def main():
         logger.info(f"Crossfade duration: {config['render'].get('crossfade_duration_seconds', 4)} sec")
         logger.info(f"Rendering to: {output_path}")
 
-        # Render
+        # Load transitions to determine segment count
+        import json
+        with open(latest_transitions) as f:
+            plan = json.load(f)
+        num_tracks = len(plan.get("transitions", []))
+
+        # Create progress tracker
+        max_tracks_before_segment = config["render"].get("max_tracks_before_segment", 10)
+        enable_progress_display = config["render"].get("enable_progress_display", True)
+        total_segments = 1  # Will be determined if segmented
+
+        # Estimate segment count
+        if num_tracks > max_tracks_before_segment:
+            segment_size = config["render"].get("segment_size", 5)
+            total_segments = (num_tracks + segment_size - 1) // segment_size
+
+        tracker = get_progress_tracker(
+            total_tracks=num_tracks,
+            total_segments=total_segments,
+            interactive=enable_progress_display,
+        )
+        tracker.set_output_path(str(output_path))
+
+        # Define progress callback
+        def progress_callback(segment_idx, total_segs, status):
+            if status == "rendering":
+                tracker.start_segment(segment_idx, 5)  # Approximate tracks per segment
+            elif status == "completed":
+                tracker.complete_segment(segment_idx)
+            elif status == "concatenating":
+                logger.info("Concatenating segments...")
+
+        # Render with segmentation support
         start_time = time.time()
         logger.info("Starting Liquidsoap rendering...")
 
-        success = render(
+        success = render_segmented(
             transitions_json_path=str(latest_transitions),
             output_path=str(output_path),
             config=config.data,  # Pass underlying dict, not Config object
-            timeout_seconds=None,  # No timeout - let render run as long as needed
+            progress_callback=progress_callback if enable_progress_display else None,
         )
+
+        # Mark progress as complete
+        if enable_progress_display:
+            tracker.complete_concatenation()
 
         elapsed_time = time.time() - start_time
 

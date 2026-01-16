@@ -65,6 +65,25 @@ time_stretch_quality = "high"
 # Enable LADSPA EQ in transitions (requires ladspa installed)
 enable_ladspa_eq = false
 
+# ==================== SEGMENTED RENDERING ====================
+# For large mixes (>max_tracks_before_segment), render in segments to reduce RAM usage
+# Strategy: Split into N-track chunks, render each, concatenate with crossfade blending
+
+# Trigger segmentation if playlist > N tracks (range: 5-50, default 10)
+# Large mixes (>10 tracks) split into segments (~50 MB each) instead of loading full mix
+max_tracks_before_segment = 10
+
+# Tracks per segment (range: 3-10, default 5)
+# Smaller = lower RAM per segment, more concatenation overhead
+# Larger = higher RAM per segment, fewer boundaries to blend
+segment_size = 5
+
+# Enable real-time progress display during rendering (interactive terminal)
+enable_progress_display = true
+
+# Progress update interval in seconds (range: 0.5-5.0)
+progress_update_interval = 1.0
+
 # ==================== SYSTEM INTEGRATION ====================
 [system]
 # Music library mount point (read-only expected)
