@@ -382,17 +382,18 @@ def _render_segment(
 def _concatenate_segments(
     segment_files: List[Path],
     output_path: str,
-    crossfade_duration: float = 4.0,
+    crossfade_duration: float = 4.0,  # Deprecated (segments already have crossfades)
 ) -> bool:
     """
-    Concatenate segment MP3 files with crossfade blending.
+    Concatenate segment MP3 files directly (no blending).
 
-    Uses ffmpeg with acrossfade filter for smooth transitions at boundaries.
+    NOTE: Segment boundaries already have smooth transitions from Liquidsoap DSP.
+    Simple concatenation via ffmpeg's concat demuxer is sufficient.
 
     Args:
         segment_files: List of segment MP3 file paths
         output_path: Output path for concatenated mix
-        crossfade_duration: Duration of crossfade blend in seconds
+        crossfade_duration: (DEPRECATED - not used)
 
     Returns:
         True if successful, False otherwise
@@ -409,66 +410,54 @@ def _concatenate_segments(
             return True
 
         logger.info(
-            f"Concatenating {len(segment_files)} segments "
-            f"with {crossfade_duration}s crossfade"
+            f"Concatenating {len(segment_files)} segments (direct concat, no crossfade)"
         )
 
-        # Build ffmpeg command with acrossfade filter
-        cmd = ["ffmpeg", "-y"]  # Overwrite output
+        # Create concat demuxer file (ffmpeg's efficient concatenation method)
+        concat_file = Path(tempfile.mktemp(suffix=".txt"))
+        try:
+            with open(concat_file, "w") as f:
+                for seg_file in segment_files:
+                    # Escape single quotes in path
+                    escaped_path = str(seg_file).replace("'", "\\'")
+                    f.write(f"file '{escaped_path}'\n")
 
-        # Add input files
-        for seg_file in segment_files:
-            cmd.extend(["-i", str(seg_file)])
+            logger.debug(f"Concat demuxer file: {concat_file}")
 
-        # Build filter complex for progressive crossfades
-        # [0][1]acrossfade=d=4[a01]; [a01][2]acrossfade=d=4[a012]; ...
-        filter_parts = []
+            # Use ffmpeg concat demuxer for fast, direct concatenation
+            cmd = [
+                "ffmpeg",
+                "-y",  # Overwrite output
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_file),
+                "-c", "copy",  # Direct stream copy (no re-encoding)
+                output_path,
+            ]
 
-        if len(segment_files) == 2:
-            # Simple 2-segment case
-            filter_complex = (
-                f"[0][1]acrossfade=d={crossfade_duration}:c1=tri:c2=tri"
+            logger.debug(f"ffmpeg command: {' '.join(cmd)}")
+
+            # Execute ffmpeg
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minutes max for concatenation
             )
-        else:
-            # Multiple segments: chain crossfades
-            prev_label = "[0]"
-            for i in range(1, len(segment_files)):
-                curr_label = f"[{i}]"
-                out_label = (
-                    f"[a{i}]" if i < len(segment_files) - 1 else ""
-                )
 
-                filter_parts.append(
-                    f"{prev_label}{curr_label}acrossfade="
-                    f"d={crossfade_duration}:c1=tri:c2=tri{out_label}"
-                )
+            if result.returncode != 0:
+                logger.error(f"ffmpeg concatenation failed: {result.stderr}")
+                return False
 
-                if i < len(segment_files) - 1:
-                    prev_label = f"[a{i}]"
+            logger.info("✅ Segment concatenation complete")
+            return True
 
-            filter_complex = ";".join(filter_parts)
-
-        cmd.extend(["-filter_complex", filter_complex])
-
-        # Output encoding
-        cmd.extend(["-c:a", "libmp3lame", "-b:a", "192k", output_path])
-
-        logger.debug(f"ffmpeg filter: {filter_complex}")
-
-        # Execute ffmpeg
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minutes max for concatenation
-        )
-
-        if result.returncode != 0:
-            logger.error(f"ffmpeg concatenation failed: {result.stderr}")
-            return False
-
-        logger.info("✅ Segment concatenation complete")
-        return True
+        finally:
+            # Cleanup concat file
+            try:
+                concat_file.unlink()
+            except Exception:
+                pass
 
     except subprocess.TimeoutExpired:
         logger.error("ffmpeg concatenation timeout (10 min)")

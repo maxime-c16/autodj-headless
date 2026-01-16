@@ -65,14 +65,15 @@ class RenderSegmenter:
         max_tracks_per_segment: Optional[int] = None,
     ) -> List[SegmentPlan]:
         """
-        Split transitions into segments with overlap for smooth boundaries.
+        Split transitions into segments WITHOUT overlap on render.
 
-        Strategy:
-            Segment 1: [Track 0-4]
-            Segment 2: [Track 4-8]  (overlap: Track 4)
-            Segment 3: [Track 8-12] (overlap: Track 8)
+        Strategy: Each segment is independent (no overlapping tracks).
+            Segment 1: [Track 0-4]    (5 tracks)
+            Segment 2: [Track 5-9]    (5 tracks, fresh start)
+            Segment 3: [Track 10-14]  (5 tracks, fresh start)
 
-        This allows segment boundaries to blend smoothly via crossfade.
+        Segments are concatenated directly without crossfade blending
+        (blending already happened within Liquidsoap DSP).
 
         Args:
             transitions: List of transition dicts from transitions.json
@@ -97,17 +98,15 @@ class RenderSegmenter:
 
         i = 0
         while i < len(transitions):
-            # Take next N tracks
+            # Take next N tracks (NO OVERLAP)
             end_idx = min(i + max_tracks_per_segment, len(transitions))
             segment_transitions = transitions[i:end_idx]
 
-            # Determine overlap configuration
+            # Determine if this is first/last segment
             has_prev = i > 0
             has_next = end_idx < len(transitions)
-            overlap_with_prev = 1 if has_prev else 0
-            overlap_with_next = 1 if has_next else 0
 
-            # Create segment
+            # Create segment (NO OVERLAP between segments on render)
             segment = SegmentPlan(
                 segment_index=len(segments),
                 track_start_idx=i,
@@ -115,8 +114,8 @@ class RenderSegmenter:
                 transitions=segment_transitions,
                 has_prev_segment=has_prev,
                 has_next_segment=has_next,
-                overlap_with_prev=overlap_with_prev,
-                overlap_with_next=overlap_with_next,
+                overlap_with_prev=0,  # NO OVERLAP
+                overlap_with_next=0,  # NO OVERLAP
             )
 
             segments.append(segment)
@@ -129,12 +128,8 @@ class RenderSegmenter:
                 f"{segment.estimated_duration_sec:.1f} sec)"
             )
 
-            # Move to next segment (with overlap)
-            # If there's a next segment, overlap by 1 track
-            if has_next:
-                i = end_idx - 1
-            else:
-                i = end_idx
+            # Move to next segment (NO OVERLAP)
+            i = end_idx
 
         logger.info(f"Split into {len(segments)} segments")
 
