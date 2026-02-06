@@ -32,6 +32,7 @@ class TransitionPlan:
         mix_out_seconds: float = 4.0,
         effect: str = "smart_crossfade",
         next_track_id: Optional[int] = None,
+        file_path: Optional[str] = None,
     ):
         """
         Args:
@@ -54,6 +55,7 @@ class TransitionPlan:
         self.mix_out_seconds = mix_out_seconds
         self.effect = effect
         self.next_track_id = next_track_id
+        self.file_path = file_path
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -67,6 +69,7 @@ class TransitionPlan:
             "mix_out_seconds": self.mix_out_seconds,
             "effect": self.effect,
             "next_track_id": self.next_track_id,
+            "file_path": self.file_path,
         }
 
 
@@ -304,7 +307,6 @@ def generate(
     # Generate M3U playlist
     library_dict = {t.get("id"): t for t in library}
     track_paths = [library_dict.get(tid, {}).get("file_path") for tid in track_ids]
-    track_paths = [p for p in track_paths if p]  # Filter out None values
 
     playlist_filename = f"playlist-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.m3u"
     playlist_path = output_path / playlist_filename
@@ -318,6 +320,13 @@ def generate(
     transitions_path = output_path / transitions_filename
 
     total_duration = sum(library_dict.get(tid, {}).get("duration_seconds", 0) for tid in track_ids)
+
+    # Populate file_path on transitions so renderer can operate without relying on temp M3U files
+    for idx, t in enumerate(transitions):
+        try:
+            t.file_path = track_paths[idx]
+        except Exception:
+            t.file_path = None
 
     if not write_transitions(transitions, "autodj-playlist", int(total_duration), transitions_path):
         logger.error("Failed to write transitions")

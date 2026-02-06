@@ -191,6 +191,66 @@ class MerlinGreedySelector:
 
         if not valid_candidates:
             logger.debug("No valid candidates found")
+            # Fallback: relax constraints progressively to avoid dead-ends
+            # 1) Ignore harmonic/key compatibility
+            relaxed = []
+            for candidate in candidates:
+                track_id = candidate.get("id")
+                if track_id in self.used_in_set:
+                    continue
+
+                if self._is_recently_used(track_id, self.constraints.max_repeat_decay):
+                    continue
+
+                if not self._bpm_compatible(
+                    current_track.get("bpm"),
+                    candidate.get("bpm"),
+                    self.constraints.bpm_tolerance,
+                ):
+                    continue
+
+                # ignore key compatibility here
+                relaxed.append(candidate)
+
+            if relaxed:
+                logger.warning("No harmonic matches — relaxing key constraint")
+                chosen = relaxed[0]
+                track_id = chosen.get("id")
+                self.used_in_set.add(track_id)
+                hints = {
+                    "bpm": chosen.get("bpm"),
+                    "key": chosen.get("key"),
+                    "valid_count": len(relaxed),
+                    "relaxed": "key",
+                }
+                return (track_id, hints)
+
+            # 2) Ignore BPM compatibility as last resort
+            relaxed2 = []
+            for candidate in candidates:
+                track_id = candidate.get("id")
+                if track_id in self.used_in_set:
+                    continue
+
+                if self._is_recently_used(track_id, self.constraints.max_repeat_decay):
+                    continue
+
+                # ignore BPM and key compatibility
+                relaxed2.append(candidate)
+
+            if relaxed2:
+                logger.warning("No candidates after relaxing key — relaxing BPM too")
+                chosen = relaxed2[0]
+                track_id = chosen.get("id")
+                self.used_in_set.add(track_id)
+                hints = {
+                    "bpm": chosen.get("bpm"),
+                    "key": chosen.get("key"),
+                    "valid_count": len(relaxed2),
+                    "relaxed": "bpm+key",
+                }
+                return (track_id, hints)
+
             return None
 
         # Greedy pick: prefer high harmonic match, lower energy deviation
