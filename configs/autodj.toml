@@ -27,6 +27,29 @@ mp3_bitrate = 192
 crossfade_duration_seconds = 4.0
 time_stretch_quality = "high"
 enable_ladspa_eq = false
+
+# DSP Enhancement Parameters (Phase 1 - Week 1)
+# EQ Automation: Cut bass on outgoing, boost clarity on incoming
+enable_eq_automation = true
+eq_lowpass_frequency = 100    # Hz: Low-pass cutoff on outgoing track
+eq_highpass_frequency = 50    # Hz: High-pass cutoff on incoming track
+
+# Filter Sweeps (Phase 2 - experimental)
+enable_filter_sweep = false
+filter_sweep_duration = 4.0   # seconds
+
+# Harmonic-Aware Transitions (Phase 2 - experimental)
+enable_harmonic_transitions = false
+crossfade_duration_short = 3.0  # For harmonically compatible tracks
+crossfade_duration_long = 5.0   # For non-compatible tracks
+
+# Tempo Ramping (Phase 2 - experimental)
+enable_tempo_ramping = false
+
+# Fade Curves
+fade_type = "sin"              # sin/lin/exp (sine recommended for smooth audio)
+
+# Memory & CPU
 max_tracks_before_segment = 10
 segment_size = 5
 enable_progress_display = true
