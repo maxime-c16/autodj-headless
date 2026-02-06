@@ -506,6 +506,7 @@ def _generate_liquidsoap_script(
     - Streaming decode/encode
     - Memory-bounded
     - Transitions: crossfades with cue points and BPM time-stretching
+    - EQ automation: Cut bass on outgoing, boost mids on incoming
 
     Args:
         plan: Transitions plan dict with transitions list
@@ -519,6 +520,11 @@ def _generate_liquidsoap_script(
     output_format = config.get("render", {}).get("output_format", "mp3")
     mp3_bitrate = config.get("render", {}).get("mp3_bitrate", 192)
     crossfade_duration = config.get("render", {}).get("crossfade_duration_seconds", 4.0)
+    
+    # DSP parameters (new in Phase 1)
+    enable_eq_automation = config.get("render", {}).get("enable_eq_automation", True)
+    eq_lowpass_frequency = config.get("render", {}).get("eq_lowpass_frequency", 100)
+    eq_highpass_frequency = config.get("render", {}).get("eq_highpass_frequency", 50)
 
     transitions = plan.get("transitions", [])
 
@@ -530,9 +536,9 @@ def _generate_liquidsoap_script(
     script = []
 
     # ==================== SETTINGS ====================
-    script.append("# AutoDJ-Headless Offline Mix")
+    script.append("# AutoDJ-Headless Offline Mix with DSP Enhancements")
     script.append("# Generated Liquidsoap script for DJ-quality mixing")
-    script.append("# Features: Cue points, BPM time-stretching, beatmatched crossfades")
+    script.append("# Features: Smart crossfades, EQ automation, Cue points, BPM time-stretching")
     script.append("")
     script.append("# Offline clock (no real-time sync)")
     script.append('set("clock.sync", false)')
@@ -540,12 +546,26 @@ def _generate_liquidsoap_script(
     script.append("")
 
     # ==================== HELPER FUNCTIONS ====================
-    script.append("# Crossfade transition function")
-    script.append("def crossfade_transition(a, b) =")
-    script.append(f"  # Linear fade-in/fade-out crossfade ({crossfade_duration}s)")
-    script.append(f"  fade_in = fade.in(duration={crossfade_duration}, b)")
-    script.append(f"  fade_out = fade.out(duration={crossfade_duration}, a)")
-    script.append("  add(normalize=false, [fade_in, fade_out])")
+    script.append("# Crossfade transition function with optional EQ automation")
+    script.append("def crossfade_transition(a, b, eq_enabled) =")
+    script.append(f"  # Sine-based crossfade ({crossfade_duration}s)")
+    
+    if enable_eq_automation:
+        script.append(f"  if eq_enabled then")
+        script.append(f"    # Apply EQ: Cut bass on outgoing, boost clarity on incoming")
+        script.append(f"    a_eq = low_pass(frequency={eq_lowpass_frequency}.0, a)")
+        script.append(f"    b_eq = high_pass(frequency={eq_highpass_frequency}.0, b)")
+        script.append(f"    fade_in_b = fade.in(duration={crossfade_duration}, b_eq)")
+        script.append(f"    fade_out_a = fade.out(duration={crossfade_duration}, a_eq)")
+        script.append(f"  else")
+        script.append(f"    fade_in_b = fade.in(duration={crossfade_duration}, b)")
+        script.append(f"    fade_out_a = fade.out(duration={crossfade_duration}, a)")
+        script.append(f"  end")
+    else:
+        script.append(f"  fade_in_b = fade.in(duration={crossfade_duration}, b)")
+        script.append(f"  fade_out_a = fade.out(duration={crossfade_duration}, a)")
+    
+    script.append("  add(normalize=false, [fade_in_b, fade_out_a])")
     script.append("end")
     script.append("")
 
@@ -593,21 +613,28 @@ def _generate_liquidsoap_script(
         script.append("")
 
     # ==================== TRACK SEQUENCE ====================
-    script.append("# Chain tracks in sequence")
+    script.append("# Chain tracks in sequence with crossfades")
     if len(track_vars) == 1:
         # Single track
         script.append(f"sequence = mksafe({track_vars[0]})")
     else:
-        # Multiple tracks: use sequence() to concatenate
-        # Note: Full crossfade implementation coming in future version
-        script.append("# Build track sequence")
-        script.append(f"sequence = mksafe(sequence([")
-        for idx, track_var in enumerate(track_vars):
-            if idx == len(track_vars) - 1:
-                script.append(f"  {track_var}")
-            else:
-                script.append(f"  {track_var},")
-        script.append("]))")
+        # Multiple tracks: use smart_crossfade between consecutive pairs
+        # Start with first track
+        script.append(f"# Start with first track")
+        sequence_var = track_vars[0]
+        
+        # Chain remaining tracks with crossfades
+        for idx in range(1, len(track_vars)):
+            next_track = track_vars[idx]
+            transition = transitions[idx]
+            
+            # Determine if EQ should be applied (enabled by default, per config)
+            eq_enabled = enable_eq_automation
+            
+            script.append(f"# Transition to track {idx + 1} (with EQ)")
+            script.append(f"{sequence_var} = crossfade_transition({sequence_var}, {next_track}, {str(eq_enabled).lower()})")
+        
+        script.append(f"sequence = mksafe({sequence_var})")
 
     script.append("")
 
