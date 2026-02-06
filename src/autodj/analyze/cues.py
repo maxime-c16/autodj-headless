@@ -2,10 +2,12 @@
 Cue Point Detection: Identify Cue-In, Cue-Out, and optional loop windows.
 
 Per SPEC.md § 5.1:
-- Cue-In: First energetic downbeat
+- Cue-In: First energetic downbeat (using aubio onset detection)
 - Cue-Out: Energy drop before mix-out
 - Loop window: Optional (16-32 bars)
 - Budget: ≤ 100 MiB peak memory
+
+Phase 1 Enhancement: Use aubio onset detection for more accurate cue points.
 """
 
 import logging
@@ -49,15 +51,54 @@ def _snap_to_beat(sample_pos: int, bpm: float, sample_rate: int) -> int:
     return int(beat_number * samples_per_beat)
 
 
+def _detect_onsets_aubio(audio_path: str, sample_rate: int, hop_size: int) -> list:
+    """
+    Detect onset points using aubio's onset detection.
+    
+    Onsets are attack points where new notes/drums typically start.
+    More accurate than energy-based detection for finding cue points.
+    
+    Args:
+        audio_path: Path to audio file
+        sample_rate: Sample rate in Hz
+        hop_size: Hop size for onset detection
+        
+    Returns:
+        List of onset frame indices
+    """
+    try:
+        source = aubio.source(audio_path, hop_size=hop_size)
+        onset_detector = aubio.onset("default", hop_size=hop_size, samplerate=source.samplerate)
+        
+        onsets = []
+        while True:
+            samples, num_read = source()
+            onset_detector(samples)
+            if onset_detector.got_onset():
+                # got_onset() returns True when an onset is detected
+                # source.tell() returns current sample position
+                onsets.append(source.tell())
+            if num_read < hop_size:
+                break
+        
+        logger.debug(f"Aubio onset detection found {len(onsets)} onsets")
+        return onsets
+        
+    except Exception as e:
+        logger.warning(f"Aubio onset detection failed: {e}")
+        return []
+
+
 def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints]:
     """
-    Detect cue points from audio file using energy analysis + beat alignment.
+    Detect cue points from audio file using aubio onset detection + energy analysis.
 
-    Algorithm:
-    1. Calculate RMS energy across the track
-    2. Find cue_in: First point where energy exceeds threshold (intro end)
-    3. Find cue_out: Last point before energy drops significantly (outro start)
-    4. Snap both to nearest beat boundary using BPM
+    Enhanced Algorithm (Phase 1):
+    1. Detect onsets using aubio (attack points)
+    2. Calculate RMS energy across the track
+    3. Find cue_in: First onset that exceeds energy threshold (intro end)
+    4. Find cue_out: Last onset before significant energy drop (outro start)
+    5. Snap both to nearest beat boundary using BPM
 
     Args:
         audio_path: Path to audio file
@@ -70,12 +111,17 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
     try:
         hop_size = config.get("aubio_hop_size", 512)
 
-        # Load audio
+        # Load audio for analysis
         logger.debug(f"Loading audio for cue detection: {audio_path}")
         source = aubio.source(audio_path, hop_size=hop_size)
         sample_rate = source.samplerate
 
-        # Process audio and collect energy data
+        # Phase 1: Detect onsets using aubio (more accurate than energy alone)
+        logger.debug(f"Detecting onsets with aubio...")
+        onsets = _detect_onsets_aubio(audio_path, sample_rate, hop_size)
+        
+        # Phase 2: Process audio for energy analysis
+        source.seek(0)  # Reset to beginning
         energies = []
         frame_count = 0
         total_samples = 0
@@ -110,26 +156,46 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
         # Normalize to 0-1 range
         smoothed_norm = (smoothed - smoothed.min()) / (smoothed.max() - smoothed.min() + 1e-6)
 
-        # === CUE IN DETECTION ===
-        # Find first frame where energy exceeds 20% of normalized range
-        # This skips quiet intros
+        # === CUE IN DETECTION (IMPROVED) ===
+        # Use first onset that exceeds 20% of normalized energy range
+        # This is more accurate than energy peak alone
         cue_in_threshold = 0.2
-        above_threshold = np.where(smoothed_norm > cue_in_threshold)[0]
+        cue_in_frame = None
+        
+        if onsets:
+            # Find first onset above energy threshold
+            for onset_frame in onsets:
+                if onset_frame < len(smoothed_norm) and smoothed_norm[onset_frame] > cue_in_threshold:
+                    cue_in_frame = int(onset_frame)
+                    break
+        
+        # Fallback to energy-based if no suitable onset found
+        if cue_in_frame is None:
+            above_threshold = np.where(smoothed_norm > cue_in_threshold)[0]
+            if len(above_threshold) > 0:
+                cue_in_frame = int(above_threshold[0])
+            else:
+                cue_in_frame = 0
 
-        if len(above_threshold) > 0:
-            cue_in_frame = int(above_threshold[0])
-        else:
-            cue_in_frame = 0
-
-        # === CUE OUT DETECTION ===
-        # Find last frame where energy is above 15% (before outro fade)
+        # === CUE OUT DETECTION (IMPROVED) ===
+        # Use last onset before significant energy drop
         cue_out_threshold = 0.15
-        above_out_threshold = np.where(smoothed_norm > cue_out_threshold)[0]
-
-        if len(above_out_threshold) > 0:
-            cue_out_frame = int(above_out_threshold[-1])
-        else:
-            cue_out_frame = len(smoothed_norm) - 1
+        cue_out_frame = None
+        
+        if onsets:
+            # Find last onset with sufficient energy
+            for onset_frame in reversed(onsets):
+                if onset_frame < len(smoothed_norm) and smoothed_norm[onset_frame] > cue_out_threshold:
+                    cue_out_frame = int(onset_frame)
+                    break
+        
+        # Fallback to energy-based if no suitable onset found
+        if cue_out_frame is None:
+            above_out_threshold = np.where(smoothed_norm > cue_out_threshold)[0]
+            if len(above_out_threshold) > 0:
+                cue_out_frame = int(above_out_threshold[-1])
+            else:
+                cue_out_frame = len(smoothed_norm) - 1
 
         # Ensure minimum track length (at least 30 seconds usable)
         min_frames = int(30 * sample_rate / hop_size)
@@ -160,9 +226,9 @@ def detect_cues(audio_path: str, bpm: float, config: dict) -> Optional[CuePoints
 
         usable_duration = (cue_out_samples - cue_in_samples) / sample_rate
         logger.info(
-            f"✅ Cues detected: in={cue_in_samples} ({cue_in_samples/sample_rate:.1f}s), "
+            f"✅ Cues detected (aubio-enhanced): in={cue_in_samples} ({cue_in_samples/sample_rate:.1f}s), "
             f"out={cue_out_samples} ({cue_out_samples/sample_rate:.1f}s) "
-            f"[usable: {usable_duration:.1f}s]"
+            f"[usable: {usable_duration:.1f}s, {len(onsets)} onsets detected]"
         )
 
         return CuePoints(
