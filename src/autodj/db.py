@@ -41,7 +41,7 @@ class TrackMetadata:
 class Database:
     """SQLite database manager for AutoDJ metadata."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     # SQL schema definition
     SCHEMA = """
@@ -91,6 +91,23 @@ class Database:
         total INTEGER NOT NULL DEFAULT 0,
         processed INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
+    );
+
+    -- Rich track analysis: JSON blobs for structure, cues, loops, spectral, loudness
+    CREATE TABLE IF NOT EXISTS track_analysis (
+        track_id TEXT PRIMARY KEY,
+        sections_json TEXT,
+        cue_points_json TEXT,
+        loop_regions_json TEXT,
+        energy_profile_json TEXT,
+        spectral_json TEXT,
+        loudness_json TEXT,
+        kick_pattern TEXT,
+        downbeat_seconds REAL,
+        total_bars INTEGER,
+        has_vocal INTEGER,
+        analyzed_at TEXT NOT NULL,
+        FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
     );
     """
 
@@ -149,10 +166,7 @@ class Database:
             cursor.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
             current_version = cursor.fetchone()[0]
             if current_version < self.SCHEMA_VERSION:
-                logger.warning(
-                    f"Schema version mismatch: {current_version} < {self.SCHEMA_VERSION}. "
-                    f"Consider running migration."
-                )
+                self._run_migrations(current_version)
 
             # Ensure analysis_progress table exists on older DBs (migration)
             cursor.execute(
@@ -173,6 +187,37 @@ class Database:
                     (datetime.now(timezone.utc).isoformat(),),
                 )
                 self.conn.commit()
+
+    def _run_migrations(self, current_version: int) -> None:
+        """Run schema migrations from current_version to SCHEMA_VERSION."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+
+        if current_version < 2:
+            logger.info("Migrating schema v1 -> v2: adding track_analysis table")
+            cursor.executescript("""
+                CREATE TABLE IF NOT EXISTS track_analysis (
+                    track_id TEXT PRIMARY KEY,
+                    sections_json TEXT,
+                    cue_points_json TEXT,
+                    loop_regions_json TEXT,
+                    energy_profile_json TEXT,
+                    spectral_json TEXT,
+                    loudness_json TEXT,
+                    kick_pattern TEXT,
+                    downbeat_seconds REAL,
+                    total_bars INTEGER,
+                    has_vocal INTEGER,
+                    analyzed_at TEXT NOT NULL,
+                    FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                );
+            """)
+            cursor.execute(
+                "INSERT OR REPLACE INTO schema_version (version, updated_at) VALUES (?, ?)",
+                (2, datetime.now(timezone.utc).isoformat()),
+            )
+            self.conn.commit()
+            logger.info("Schema migration v1 -> v2 complete")
 
 
     def add_track(self, metadata: TrackMetadata) -> None:
@@ -417,6 +462,128 @@ class Database:
         rows = cursor.fetchall()
 
         return [dict(row) for row in rows]
+
+    # ===== Rich track analysis (Phase 5: structure) =====
+
+    def save_track_analysis(self, track_id: str, analysis: Dict[str, Any]) -> None:
+        """
+        Save or update rich track analysis data.
+
+        Args:
+            track_id: Track ID (must exist in tracks table).
+            analysis: Dict with keys matching track_analysis columns.
+                      JSON-serializable values for *_json columns.
+        """
+        assert self.conn is not None
+        import json
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO track_analysis (
+                track_id, sections_json, cue_points_json, loop_regions_json,
+                energy_profile_json, spectral_json, loudness_json,
+                kick_pattern, downbeat_seconds, total_bars, has_vocal,
+                analyzed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                track_id,
+                json.dumps(analysis.get("sections")) if analysis.get("sections") is not None else None,
+                json.dumps(analysis.get("cue_points")) if analysis.get("cue_points") is not None else None,
+                json.dumps(analysis.get("loop_regions")) if analysis.get("loop_regions") is not None else None,
+                json.dumps(analysis.get("energy_profile")) if analysis.get("energy_profile") is not None else None,
+                json.dumps(analysis.get("spectral")) if analysis.get("spectral") is not None else None,
+                json.dumps(analysis.get("loudness")) if analysis.get("loudness") is not None else None,
+                analysis.get("kick_pattern"),
+                analysis.get("downbeat_seconds"),
+                analysis.get("total_bars"),
+                1 if analysis.get("has_vocal") else 0,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self.conn.commit()
+        logger.debug(f"Saved track analysis: {track_id}")
+
+    def get_track_analysis(self, track_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Load rich track analysis data.
+
+        Args:
+            track_id: Track ID.
+
+        Returns:
+            Dict with analysis data, or None if not found.
+        """
+        assert self.conn is not None
+        import json
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM track_analysis WHERE track_id = ?", (track_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        result = {
+            "track_id": row["track_id"],
+            "sections": json.loads(row["sections_json"]) if row["sections_json"] else None,
+            "cue_points": json.loads(row["cue_points_json"]) if row["cue_points_json"] else None,
+            "loop_regions": json.loads(row["loop_regions_json"]) if row["loop_regions_json"] else None,
+            "energy_profile": json.loads(row["energy_profile_json"]) if row["energy_profile_json"] else None,
+            "spectral": json.loads(row["spectral_json"]) if row["spectral_json"] else None,
+            "loudness": json.loads(row["loudness_json"]) if row["loudness_json"] else None,
+            "kick_pattern": row["kick_pattern"],
+            "downbeat_seconds": row["downbeat_seconds"],
+            "total_bars": row["total_bars"],
+            "has_vocal": bool(row["has_vocal"]),
+            "analyzed_at": row["analyzed_at"],
+        }
+        return result
+
+    def list_tracks_with_analysis(self) -> List[Dict[str, Any]]:
+        """
+        List all tracks that have rich analysis data.
+
+        Returns:
+            List of dicts with track metadata joined with analysis data.
+        """
+        assert self.conn is not None
+        import json
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT t.*, ta.kick_pattern, ta.downbeat_seconds, ta.total_bars,
+                   ta.has_vocal, ta.sections_json, ta.cue_points_json
+            FROM tracks t
+            INNER JOIN track_analysis ta ON t.id = ta.track_id
+        """)
+        rows = cursor.fetchall()
+
+        result = []
+        for row in rows:
+            track = {
+                "id": row["id"],
+                "file_path": row["file_path"],
+                "duration_seconds": row["duration_seconds"],
+                "bpm": row["bpm"],
+                "key": row["key"],
+                "cue_in_frames": row["cue_in_frames"],
+                "cue_out_frames": row["cue_out_frames"],
+                "title": row["title"],
+                "artist": row["artist"],
+                "kick_pattern": row["kick_pattern"],
+                "downbeat_seconds": row["downbeat_seconds"],
+                "total_bars": row["total_bars"],
+                "has_vocal": bool(row["has_vocal"]),
+            }
+            if row["cue_points_json"]:
+                track["cue_points"] = json.loads(row["cue_points_json"])
+            if row["sections_json"]:
+                track["sections"] = json.loads(row["sections_json"])
+            result.append(track)
+
+        return result
 
     def get_stats(self) -> Dict[str, Any]:
         """

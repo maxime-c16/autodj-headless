@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 try:
     import aubio
     HAS_AUBIO = True
-    logger.debug(f"✅ aubio {aubio.__version__} available - using for onset detection")
+    logger.debug(f"✅ aubio {getattr(aubio, 'version', 'unknown')} available - using for onset detection")
 except ImportError:
     HAS_AUBIO = False
     logger.debug("⚠️ aubio not available - using hybrid fallback method")
@@ -566,63 +566,89 @@ def _snap_to_beat(sample_pos: int, bpm: float, sample_rate: int) -> int:
 def _load_audio_mono(audio_path: str, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
     """
     Load audio file as mono, resampling to target sample rate if needed.
-    
-    Supports WAV format (most common for DJ analysis).
-    Falls back to linear interpolation resampling if scipy unavailable.
-    
+
+    Supports multiple formats with smart fallback chain:
+    1. soundfile (fast, supports WAV, FLAC)
+    2. wave module (built-in, WAV only)
+    3. librosa (universal format support via ffmpeg/audioread)
+
     Args:
-        audio_path: Path to audio file
+        audio_path: Path to audio file (WAV, M4A, MP3, FLAC, OGG, etc.)
         sample_rate: Target sample rate (default: 44.1 kHz)
-        
+
     Returns:
         Tuple of (audio_array, actual_sample_rate)
     """
+    # ===== STRATEGY 1: Try soundfile (fastest, widely compatible) =====
     try:
         import soundfile as sf
         audio, sr = sf.read(audio_path, dtype='float32')
-        
+
         # Convert to mono if stereo
         if len(audio.shape) > 1 and audio.shape[1] > 1:
             audio = np.mean(audio, axis=1)
-        
-        logger.debug(f"Loaded audio: {audio.shape}, SR={sr}")
+
+        logger.debug(f"Loaded audio via soundfile: {audio.shape}, SR={sr}")
         return audio, sr
-        
+
+    except (ImportError, Exception) as e:
+        logger.debug(f"soundfile failed ({type(e).__name__}): {e}, trying fallback...")
+
+    # ===== STRATEGY 2: Try wave module (built-in, WAV-only) =====
+    try:
+        with wave.open(audio_path, 'rb') as wf:
+            n_channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+            sr = wf.getframerate()
+            n_frames = wf.getnframes()
+
+            # Read audio data
+            audio_bytes = wf.readframes(n_frames)
+
+            # Decode based on sample width
+            if sample_width == 1:
+                dtype = np.uint8
+                audio = np.frombuffer(audio_bytes, dtype=dtype)
+                audio = (audio - 128) / 128.0  # Convert to [-1, 1]
+            elif sample_width == 2:
+                dtype = np.int16
+                audio = np.frombuffer(audio_bytes, dtype=dtype)
+                audio = audio / 32768.0  # Convert to [-1, 1]
+            else:
+                raise ValueError(f"Unsupported sample width: {sample_width}")
+
+            # Reshape for multi-channel
+            if n_channels > 1:
+                audio = audio.reshape(-1, n_channels)
+                audio = np.mean(audio, axis=1)  # Mix to mono
+
+            logger.debug(f"Loaded audio via wave module: {audio.shape}, SR={sr}")
+            return audio, sr
+
+    except Exception as e:
+        logger.debug(f"wave module failed ({type(e).__name__}): {e}, trying librosa...")
+
+    # ===== STRATEGY 3: Try librosa (universal format support) =====
+    try:
+        import librosa
+        logger.debug(f"Loading {audio_path} via librosa...")
+        audio, sr = librosa.load(audio_path, sr=None, mono=True)
+
+        # Ensure float32 dtype
+        audio = audio.astype(np.float32)
+
+        logger.debug(f"Loaded audio via librosa: {audio.shape}, SR={sr}")
+        return audio, sr
+
     except ImportError:
-        # Fallback: try WAV reading with wave module
-        try:
-            with wave.open(audio_path, 'rb') as wf:
-                n_channels = wf.getnchannels()
-                sample_width = wf.getsampwidth()
-                sr = wf.getframerate()
-                n_frames = wf.getnframes()
-                
-                # Read audio data
-                audio_bytes = wf.readframes(n_frames)
-                
-                # Decode based on sample width
-                if sample_width == 1:
-                    dtype = np.uint8
-                    audio = np.frombuffer(audio_bytes, dtype=dtype)
-                    audio = (audio - 128) / 128.0  # Convert to [-1, 1]
-                elif sample_width == 2:
-                    dtype = np.int16
-                    audio = np.frombuffer(audio_bytes, dtype=dtype)
-                    audio = audio / 32768.0  # Convert to [-1, 1]
-                else:
-                    raise ValueError(f"Unsupported sample width: {sample_width}")
-                
-                # Reshape for multi-channel
-                if n_channels > 1:
-                    audio = audio.reshape(-1, n_channels)
-                    audio = np.mean(audio, axis=1)  # Mix to mono
-                
-                logger.debug(f"Loaded WAV: {audio.shape}, SR={sr}")
-                return audio, sr
-                
-        except Exception as e:
-            logger.error(f"Failed to load audio {audio_path}: {e}")
-            raise
+        logger.error("librosa not installed. Cannot load non-WAV formats.")
+        raise ValueError(
+            f"Failed to load {audio_path}. "
+            "Install librosa for M4A/MP3 support: pip install librosa"
+        )
+    except Exception as e:
+        logger.error(f"All audio loading strategies failed for {audio_path}: {e}")
+        raise
 
 
 def _compute_rms_energy(audio: np.ndarray, hop_size: int = 512) -> np.ndarray:

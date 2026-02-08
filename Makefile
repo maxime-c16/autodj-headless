@@ -1,4 +1,4 @@
-.PHONY: help dev-up dev-down rebuild analyze generate render clean logs
+.PHONY: help dev-up dev-down rebuild analyze generate render clean logs nightly nightly-status quick-mix quick-list quick-search
 
 # Project Configuration
 PROJECT_NAME := autodj
@@ -27,6 +27,16 @@ help:
 	@echo ""
 	@echo "  🔧 INFRASTRUCTURE"
 	@echo "    make rebuild          Rebuild base Docker image (rare)"
+	@echo ""
+	@echo "  🌙 NIGHTLY PIPELINE"
+	@echo "    make nightly          Run nightly pipeline (analyze+generate+render)"
+	@echo "    make nightly-status   Show last run log and output files"
+	@echo ""
+	@echo "  🎧 QUICK MIX (test render)"
+	@echo "    make quick-mix SEED='Deine Angst' TRACK_COUNT=3"
+	@echo "    make quick-mix TRACKS='track1, track2, track3'"
+	@echo "    make quick-search Q='klangkuenstler'"
+	@echo "    make quick-list           List all tracks in library"
 	@echo ""
 	@echo "  🧹 UTILITIES"
 	@echo "    make clean            Remove containers & volumes"
@@ -114,6 +124,63 @@ validate-config:
 	@echo "🔐 Validating configuration..."
 	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
 		python -c "from src.autodj.config import Config; c = Config.load(); print('✅ Config valid')"
+
+# ==================== NIGHTLY PIPELINE ====================
+
+nightly:
+	@echo "🌙 Running nightly AutoDJ pipeline..."
+	@bash $(CURDIR)/scripts/autodj-nightly.sh
+
+nightly-status:
+	@echo "🌙 Nightly Pipeline Status"
+	@echo "════════════════════════════════════════"
+	@echo ""
+	@echo "📋 Latest log:"
+	@if ls $(CURDIR)/data/logs/nightly-*.log 1>/dev/null 2>&1; then \
+		LATEST_LOG=$$(ls -t $(CURDIR)/data/logs/nightly-*.log | head -1); \
+		echo "   $$LATEST_LOG"; \
+		echo ""; \
+		tail -20 "$$LATEST_LOG"; \
+	else \
+		echo "   No nightly logs found."; \
+	fi
+	@echo ""
+	@echo "📦 Output mixes in /srv/nas/shared/automix/:"
+	@ls -lh /srv/nas/shared/automix/autodj-mix-*.mp3 2>/dev/null || echo "   No mixes delivered yet."
+	@echo ""
+	@echo "💾 Local mixes in data/mixes/:"
+	@ls -lh $(CURDIR)/data/mixes/*.mp3 2>/dev/null || echo "   No local mixes."
+
+# ==================== QUICK MIX (test render) ====================
+
+quick-mix:
+	@if [ -z "$(TRACKS)" ] && [ -z "$(SEED)" ] && [ -z "$(SEED_TRACK_ID)" ]; then \
+		echo "🎧 Quick Mix — test render with human-readable track names"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  make quick-mix SEED='Deine Angst' TRACK_COUNT=3"; \
+		echo "  make quick-mix SEED='klangkuenstler' TRACK_COUNT=5"; \
+		echo "  make quick-mix TRACKS='Deine Angst, Toter Schmetterling, Blood On My Hands'"; \
+		echo ""; \
+		echo "Browse library:"; \
+		echo "  make quick-search Q='klangkuenstler'"; \
+		echo "  make quick-list"; \
+		exit 1; \
+	fi
+	@docker-compose -f $(DEV_COMPOSE) exec -T \
+		-e TRACKS="$(TRACKS)" \
+		-e SEED="$(SEED)" \
+		-e SEED_TRACK_ID="$(SEED_TRACK_ID)" \
+		-e TRACK_COUNT="$(TRACK_COUNT)" \
+		autodj python3 /app/scripts/quick_mix.py
+
+quick-list:
+	@docker-compose -f $(DEV_COMPOSE) exec -T autodj \
+		python3 /app/scripts/quick_mix.py --list
+
+quick-search:
+	@docker-compose -f $(DEV_COMPOSE) exec -T autodj \
+		python3 /app/scripts/quick_mix.py --search "$(Q)"
 
 # ==================== INTERNAL TARGETS (not for direct use) ====================
 

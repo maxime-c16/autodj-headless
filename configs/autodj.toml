@@ -9,6 +9,7 @@ seed_track_path = ""
 bpm_tolerance_percent = 4.0
 energy_window_size = 3
 min_track_duration_seconds = 120
+max_track_duration_seconds = 1200
 max_repeat_decay_hours = 168
 
 [analysis]
@@ -23,7 +24,7 @@ window_size = 4096
 
 [render]
 output_format = "mp3"
-mp3_bitrate = 192
+mp3_bitrate = 320
 crossfade_duration_seconds = 4.0
 time_stretch_quality = "high"
 enable_ladspa_eq = false

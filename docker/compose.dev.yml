@@ -17,16 +17,18 @@ services:
     tty: true
 
     # ==================== RESOURCE LIMITS (MANDATORY per SPEC.md) ====================
-    cpus: '0.5'                    # Max 50% of one core (prevent CPU runaway)
-    mem_limit: 512m                # Hard limit: 512 MiB
-    mem_reservation: 256m          # Soft limit: 256 MiB (allow burst)
-    memswap_limit: 512m            # No paging to host disk
-    pids_limit: 256                # Prevent fork bombs
+    cpus: '2'                      # 2 cores for dev (adjust for production)
+    mem_limit: 6g                  # 6 GiB (increased from 3GB for liquidsoap buffering)
+    mem_reservation: 2g            # Soft limit (increased from 512m)
+    memswap_limit: 6g              # Match mem_limit
+    pids_limit: 512                # Generous for dev
 
     # ==================== BIND MOUNTS (fast iteration, code never in image) ====================
     volumes:
       # Source code
       - ../src:/app/src:ro                    # Read-only (safety)
+      # Scripts (quick_mix, nightly, etc.)
+      - ../scripts:/app/scripts:ro            # Read-only (safety)
       # Tests
       - ../tests:/app/tests:ro                # Read-only (safety)
       # Configuration
@@ -43,7 +45,7 @@ services:
     network_mode: bridge
     ports:
       # Expose only what's needed (Navidrome API assumed on host)
-      - "127.0.0.1:8080:8080"  # Optional: dev server port
+      - "127.0.0.1:8089:8080"  # Dev server port (8089 to avoid conflicts)
 
     # ==================== ENVIRONMENT ====================
     environment:

@@ -24,6 +24,12 @@ import shutil
 from subprocess import PIPE, STDOUT, Popen
 
 from autodj.render.segmenter import RenderSegmenter, SegmentPlan
+from autodj.render.loop_extract import (
+    create_loop_hold,
+    create_loop_roll,
+    create_temp_loop_dir,
+    cleanup_temp_loops,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +53,7 @@ def render(
         True if successful, False otherwise
     """
     script_path = None
+    temp_loop_dir = None
     try:
         # Load transitions plan
         with open(transitions_json_path, "r") as f:
@@ -72,8 +79,22 @@ def render(
                 logger.error(f" Transition {m[0]}: {m[1]} -> {m[2]}")
             return False
 
-        # Generate Liquidsoap script
-        script = _generate_liquidsoap_script(plan, output_path, config)
+        # Check if any transition uses v2 types (loop_hold, drop_swap, etc.)
+        transitions = plan.get("transitions", [])
+        has_v2_transitions = any(
+            t.get("transition_type") in ("loop_hold", "drop_swap", "loop_roll", "eq_blend")
+            for t in transitions
+        )
+
+        if has_v2_transitions:
+            # Pre-extract loop segments for transitions that need them
+            temp_loop_dir = _preprocess_loops(plan, config)
+            # Generate v2 script with per-transition assembly
+            script = _generate_liquidsoap_script_v2(plan, output_path, config, temp_loop_dir)
+        else:
+            # Legacy: all bass_swap or no transition_type field
+            script = _generate_liquidsoap_script_legacy(plan, output_path, config)
+
         if not script:
             logger.error("Failed to generate Liquidsoap script")
             return False
@@ -157,7 +178,7 @@ def render(
         # Add metadata to output
         playlist_id = plan.get("playlist_id", "autodj-playlist")
         timestamp = datetime.now().isoformat()
-        _write_mix_metadata(output_path, playlist_id, timestamp)
+        _write_mix_metadata(output_path, playlist_id, timestamp, transitions=plan.get("transitions"))
 
         logger.info(f"✅ Render complete: {output_path}")
         return True
@@ -178,6 +199,9 @@ def render(
                 logger.debug(f"Cleaned up temp script: {script_path}")
             except Exception as e:
                 logger.warning(f"Failed to clean up temp script {script_path}: {e}")
+        # Cleanup temp loop files
+        if temp_loop_dir:
+            cleanup_temp_loops(temp_loop_dir)
 
 
 def render_segmented(
@@ -300,7 +324,7 @@ def render_segmented(
         # Write metadata to final output
         playlist_id = plan.get("playlist_id", "autodj-playlist")
         timestamp = datetime.now().isoformat()
-        _write_mix_metadata(output_path, playlist_id, timestamp)
+        _write_mix_metadata(output_path, playlist_id, timestamp, transitions=transitions)
 
         logger.info(f"✅ Segmented render complete: {output_path}")
         return True
@@ -495,18 +519,14 @@ def _calculate_stretch_ratio(
     return ratio
 
 
-def _generate_liquidsoap_script(
+def _generate_liquidsoap_script_legacy(
     plan: dict, output_path: str, config: dict, m3u_path: str = ""
 ) -> str:
     """
-    Generate Liquidsoap offline mixing script with advanced DSP.
+    Generate Liquidsoap offline mixing script with pro DJ DSP.
 
-    Per SPEC.md § 5.3:
-    - Offline clock (no real-time sync)
-    - Streaming decode/encode
-    - Memory-bounded
-    - Transitions: crossfades with cue points and BPM time-stretching
-    - EQ automation: Cut bass on outgoing, boost mids on incoming
+    Architecture: sequence([tracks]) + cross(dj_transition) for sequential
+    playback with bass-swap crossfades, sub-bass cleanup, and limiting.
 
     Args:
         plan: Transitions plan dict with transitions list
@@ -518,13 +538,8 @@ def _generate_liquidsoap_script(
         Liquidsoap script as string
     """
     output_format = config.get("render", {}).get("output_format", "mp3")
-    mp3_bitrate = config.get("render", {}).get("mp3_bitrate", 192)
-    crossfade_duration = config.get("render", {}).get("crossfade_duration_seconds", 4.0)
-    
-    # DSP parameters (new in Phase 1)
-    enable_eq_automation = config.get("render", {}).get("enable_eq_automation", True)
-    eq_lowpass_frequency = config.get("render", {}).get("eq_lowpass_frequency", 100)
-    eq_highpass_frequency = config.get("render", {}).get("eq_highpass_frequency", 50)
+    mp3_bitrate = config.get("render", {}).get("mp3_bitrate", 320)
+    fallback_xfade = config.get("render", {}).get("crossfade_duration_seconds", 4.0)
 
     transitions = plan.get("transitions", [])
 
@@ -532,56 +547,40 @@ def _generate_liquidsoap_script(
         logger.error("No transitions in plan")
         return ""
 
-    # Start building Liquidsoap script
+    # Compute bar-aligned crossfade duration from average BPM
+    bpms = [t.get("bpm") for t in transitions if t.get("bpm")]
+    if bpms:
+        avg_bpm = sum(bpms) / len(bpms)
+        xfade_duration = 8 * 4 * 60.0 / avg_bpm  # 8 bars
+    else:
+        avg_bpm = 0
+        xfade_duration = fallback_xfade
+
     script = []
 
-    # ==================== SETTINGS ====================
-    script.append("# AutoDJ-Headless Offline Mix with DSP Enhancements")
-    script.append("# Generated Liquidsoap script for DJ-quality mixing")
-    script.append("# Features: Smart crossfades, EQ automation, Cue points, BPM time-stretching")
-    script.append("")
-    script.append("# Offline clock (no real-time sync)")
-    script.append('set("clock.sync", false)')
-    script.append('set("frame.video.samplerate", 44100)')
+    # ==================== HEADER ====================
+    script.append("# AutoDJ-Headless Pro DJ Mix")
+    script.append("# Architecture: sequence() + cross() with bass swap, filter, limiter")
+    script.append(f"# Crossfade: {xfade_duration:.1f}s (8 bars at {avg_bpm:.0f} BPM)" if avg_bpm else f"# Crossfade: {xfade_duration:.1f}s (fallback)")
     script.append("")
 
-    # ==================== HELPER FUNCTIONS ====================
-    script.append("# Crossfade transition function with optional EQ automation")
-    script.append("def crossfade_transition(a, b, eq_enabled) =")
-    script.append(f"  # Sine-based crossfade ({crossfade_duration}s)")
-    script.append(f"  # Research: Sine fade curve matches natural loudness perception")
-    
-    if enable_eq_automation:
-        script.append(f"  if eq_enabled then")
-        script.append(f"    # ===== EQ AUTOMATION (PHASE 1) =====")
-        script.append(f"    # Per DJ research: Cut bass of outgoing, keep bass in incoming")
-        script.append(f"    # Effect: Prevents mud/clash, smoother frequency transition")
-        script.append(f"    # LPF on outgoing @ {eq_lowpass_frequency} Hz: removes bass rumble")
-        script.append(f"    a_filtered = eqffmpeg.low_pass(frequency={eq_lowpass_frequency}.0, q=0.7, a)")
-        script.append(f"    # HPF on incoming @ {eq_highpass_frequency} Hz: removes subsonic rumble")
-        script.append(f"    b_filtered = eqffmpeg.high_pass(frequency={eq_highpass_frequency}.0, q=0.7, b)")
-        script.append(f"    # Crossfade filtered tracks with sine envelope")
-        script.append(f"    fade_in_b = fade.in(type=\"sin\", duration={crossfade_duration}, b_filtered)")
-        script.append(f"    fade_out_a = fade.out(type=\"sin\", duration={crossfade_duration}, a_filtered)")
-        script.append(f"  else")
-        script.append(f"    # No EQ: standard crossfade")
-        script.append(f"    fade_in_b = fade.in(type=\"sin\", duration={crossfade_duration}, b)")
-        script.append(f"    fade_out_a = fade.out(type=\"sin\", duration={crossfade_duration}, a)")
-        script.append(f"  end")
-    else:
-        script.append(f"  # EQ automation disabled")
-        script.append(f"  fade_in_b = fade.in(type=\"sin\", duration={crossfade_duration}, b)")
-        script.append(f"  fade_out_a = fade.out(type=\"sin\", duration={crossfade_duration}, a)")
-    
-    script.append("  add(normalize=false, [fade_in_b, fade_out_a])")
+    # ==================== TRANSITION FUNCTION ====================
+    script.append("# === DJ TRANSITION (bass swap + incoming filter) ===")
+    script.append(f"def dj_transition(a, b) =")
+    script.append(f"  # cross() passes records with .source, .db_level, .metadata")
+    script.append(f"  # Outgoing: bass kill via high-pass filter (cut below 200Hz) + fade out")
+    script.append(f"  a_cut = filter.iir.butterworth.high(frequency=200.0, order=2, a.source)")
+    script.append(f"  a_faded = fade.out(type=\"sin\", duration={xfade_duration:.1f}, a_cut)")
+    script.append(f"  # Incoming: start filtered (Butterworth LPF @ 2500Hz) + fade in")
+    script.append(f"  b_filtered = filter.iir.butterworth.low(frequency=2500.0, order=2, b.source)")
+    script.append(f"  b_faded = fade.in(type=\"sin\", duration={xfade_duration:.1f}, b_filtered)")
+    script.append(f"  add(normalize=false, [a_faded, b_faded])")
     script.append("end")
     script.append("")
 
-    # ==================== TRACK SEQUENCE BUILD ====================
-    script.append("# Build track sequence with cue points and time-stretching")
-    script.append("")
+    # ==================== TRACK DEFINITIONS ====================
+    script.append("# === TRACK DEFINITIONS ===")
 
-    # Generate individual track definitions
     track_vars = []
     for idx, trans in enumerate(transitions):
         track_var = f"track_{idx}"
@@ -593,6 +592,13 @@ def _generate_liquidsoap_script(
         target_bpm = trans.get("target_bpm", native_bpm)
         cue_in_frames = trans.get("cue_in_frames", 0)
         cue_out_frames = trans.get("cue_out_frames")
+        title = trans.get("title", "")
+        artist = trans.get("artist", "")
+
+        # Section-aware timing: use outro_start if available for cue_out
+        outro_start = trans.get("outro_start_seconds")
+        if outro_start is not None and outro_start > 0:
+            cue_out_frames = int(outro_start * 44100)
 
         # Convert frames to seconds
         cue_in_sec = _frames_to_seconds(cue_in_frames)
@@ -601,65 +607,431 @@ def _generate_liquidsoap_script(
         # Calculate stretch ratio for BPM matching
         stretch_ratio = _calculate_stretch_ratio(native_bpm, target_bpm)
 
-        # Build track with processing pipeline
-        script.append(f"# Track {idx + 1}: {track_id}")
-        script.append(f"#   Native BPM: {native_bpm}, Target BPM: {target_bpm}, Stretch: {stretch_ratio:.3f}")
-        script.append(f"{track_var} = single(\"{file_path}\")")
+        script.append(f"# Track {idx + 1}: {artist} - {title}" if artist else f"# Track {idx + 1}: {track_id}")
+        script.append(f"#   BPM: {native_bpm} -> {target_bpm}, Stretch: {stretch_ratio:.3f}")
 
-        # Apply cue points (trim if cue_out is set)
+        # Build annotate URI with cue points (Liquidsoap 2.1 metadata-based cueing)
+        annotations = []
+        if cue_in_sec > 0:
+            annotations.append(f"liq_cue_in={cue_in_sec:.3f}")
         if cue_out_sec > 0:
-            script.append(f"{track_var} = trim(start={cue_in_sec:.3f}, stop={cue_out_sec:.3f}, {track_var})")
-        elif cue_in_sec > 0:
-            script.append(f"{track_var} = trim(start={cue_in_sec:.3f}, {track_var})")
+            annotations.append(f"liq_cue_out={cue_out_sec:.3f}")
+
+        if annotations:
+            annotate_str = ",".join(annotations)
+            script.append(f'{track_var} = once(single("annotate:{annotate_str}:{file_path}"))')
+            script.append(f"{track_var} = cue_cut({track_var})")
+        else:
+            script.append(f'{track_var} = once(single("{file_path}"))')
 
         # Apply time-stretching for BPM matching
         if stretch_ratio != 1.0:
             script.append(f"{track_var} = stretch(ratio={stretch_ratio:.3f}, {track_var})")
 
-        # Wrap in once() to ensure single playback
-        script.append(f"{track_var} = once({track_var})")
         script.append("")
 
-    # ==================== TRACK SEQUENCE ====================
-    script.append("# Chain tracks in sequence with crossfades")
+    # ==================== SEQUENCING + CROSSFADE ====================
     if len(track_vars) == 1:
-        # Single track
-        script.append(f"sequence = mksafe({track_vars[0]})")
+        # Single track — no sequence/cross needed
+        script.append("# Single track, no crossfade")
+        script.append(f"mixed = {track_vars[0]}")
     else:
-        # Multiple tracks: use smart_crossfade between consecutive pairs
-        # Start with first track
-        script.append(f"# Start with first track")
-        sequence_var = track_vars[0]
-        
-        # Chain remaining tracks with crossfades
-        for idx in range(1, len(track_vars)):
-            next_track = track_vars[idx]
-            transition = transitions[idx]
-            
-            # Determine if EQ should be applied (enabled by default, per config)
-            eq_enabled = enable_eq_automation
-            
-            script.append(f"# Transition to track {idx + 1} (with EQ)")
-            script.append(f"{sequence_var} = crossfade_transition({sequence_var}, {next_track}, {str(eq_enabled).lower()})")
-        
-        script.append(f"sequence = mksafe({sequence_var})")
+        script.append("# === SEQUENTIAL PLAYBACK + CROSSFADE ===")
+        track_list = ", ".join(track_vars)
+        script.append(f"playlist = sequence([{track_list}])")
+        script.append(f"mixed = cross(duration={xfade_duration:.1f}, dj_transition, playlist)")
 
     script.append("")
 
-    # ==================== OUTPUT ENCODING ====================
-    script.append("# Encode and output")
+    # ==================== MASTER PROCESSING ====================
+    script.append("# === MASTER PROCESSING ===")
+    script.append("# Sub-bass rumble removal (< 30Hz)")
+    script.append("mixed = filter.iir.butterworth.high(frequency=30.0, order=2, mixed)")
+    script.append("")
+    script.append("# Soft limiter (prevent clipping from overlapping transitions)")
+    script.append("mixed = compress(threshold=-1.0, ratio=20.0, attack=0.1, release=50.0, mixed)")
+    script.append("")
+
+    # ==================== OUTPUT ====================
+    script.append("# === OUTPUT ===")
     if output_format == "mp3":
         script.append(
-            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", sequence)'
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", '
+            f'fallible=true, on_stop=shutdown, clock(sync="none", mixed))'
         )
     elif output_format == "flac":
-        script.append(f'output.file(%flac, "{output_path}", sequence)')
+        script.append(
+            f'output.file(%flac, "{output_path}", '
+            f'fallible=true, on_stop=shutdown, clock(sync="none", mixed))'
+        )
     else:
         logger.warning(f"Unknown output format: {output_format}, defaulting to MP3")
         script.append(
-            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", sequence)'
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", '
+            f'fallible=true, on_stop=shutdown, clock(sync="none", mixed))'
         )
 
+    script.append("")
+
+    return "\n".join(script)
+
+
+# Backward-compatible alias for existing tests and callers
+_generate_liquidsoap_script = _generate_liquidsoap_script_legacy
+
+
+def _preprocess_loops(plan: dict, config: dict) -> Optional[str]:
+    """
+    Pre-extract loop segments for transitions that need them.
+
+    Scans the transition list, identifies which transitions need
+    loop segments (loop_hold, loop_roll), and creates WAV files
+    in a temp directory.
+
+    Args:
+        plan: Transitions plan dict
+        config: Render config
+
+    Returns:
+        Path to temp directory containing loop files, or None if no loops needed
+    """
+    transitions = plan.get("transitions", [])
+    needs_loops = any(
+        t.get("transition_type") in ("loop_hold", "loop_roll")
+        for t in transitions
+    )
+
+    if not needs_loops:
+        return None
+
+    temp_dir = create_temp_loop_dir()
+    logger.info(f"Pre-processing loop segments in {temp_dir}")
+
+    for idx, trans in enumerate(transitions):
+        tt = trans.get("transition_type", "bass_swap")
+        file_path = trans.get("file_path", "")
+        bpm = trans.get("bpm") or 128.0
+
+        if tt == "loop_hold":
+            loop_start = trans.get("loop_start_seconds", 0.0)
+            loop_end = trans.get("loop_end_seconds", 0.0)
+            loop_repeats = trans.get("loop_repeats", 2)
+            if loop_start >= 0 and loop_end > loop_start:
+                output = str(Path(temp_dir) / f"t{idx}_loop.wav")
+                success = create_loop_hold(
+                    file_path, loop_start, loop_end, loop_repeats, output,
+                )
+                if success:
+                    trans["_loop_wav_path"] = output
+                    logger.debug(f"Transition {idx}: loop_hold WAV ready")
+                else:
+                    logger.warning(f"Transition {idx}: loop_hold extraction failed, falling back to bass_swap")
+                    trans["transition_type"] = "bass_swap"
+
+        elif tt == "loop_roll":
+            loop_start = trans.get("loop_start_seconds", 0.0)
+            roll_stages_json = trans.get("roll_stages")
+            if roll_stages_json:
+                try:
+                    stages = json.loads(roll_stages_json) if isinstance(roll_stages_json, str) else roll_stages_json
+                    # Convert lists to tuples
+                    stages = [(s[0], s[1]) for s in stages]
+                except (json.JSONDecodeError, IndexError, TypeError):
+                    stages = [(8, 1), (4, 1), (2, 1), (1, 2)]
+            else:
+                stages = [(8, 1), (4, 1), (2, 1), (1, 2)]
+
+            output = str(Path(temp_dir) / f"t{idx}_roll.wav")
+            success = create_loop_roll(
+                file_path, loop_start, bpm, stages, output,
+            )
+            if success:
+                trans["_loop_wav_path"] = output
+                logger.debug(f"Transition {idx}: loop_roll WAV ready")
+            else:
+                logger.warning(f"Transition {idx}: loop_roll extraction failed, falling back to bass_swap")
+                trans["transition_type"] = "bass_swap"
+
+    return temp_dir
+
+
+def _generate_liquidsoap_script_v2(
+    plan: dict, output_path: str, config: dict, temp_loop_dir: Optional[str] = None,
+) -> str:
+    """
+    Generate Liquidsoap script with per-transition manual assembly (v2).
+
+    Architecture: sequence([body, transition, body, ...]) with add() layering.
+    Each transition gets its own type-specific DSP chain.
+    NO cross() — full per-transition control.
+
+    Args:
+        plan: Transitions plan dict
+        output_path: Path to output file
+        config: Render config
+        temp_loop_dir: Path to pre-extracted loop WAV files
+
+    Returns:
+        Liquidsoap script as string
+    """
+    output_format = config.get("render", {}).get("output_format", "mp3")
+    mp3_bitrate = config.get("render", {}).get("mp3_bitrate", 320)
+    transitions = plan.get("transitions", [])
+
+    if not transitions:
+        logger.error("No transitions in plan")
+        return ""
+
+    script = []
+    script.append("# AutoDJ-Headless Pro DJ Mix v2")
+    script.append("# Architecture: sequence([body, transition, body, ...]) with per-transition DSP")
+    script.append("")
+
+    sequence_parts = []
+
+    for idx, trans in enumerate(transitions):
+        file_path = trans.get("file_path", "")
+        native_bpm = trans.get("bpm")
+        target_bpm = trans.get("target_bpm", native_bpm)
+        cue_in_frames = trans.get("cue_in_frames", 0)
+        cue_out_frames = trans.get("cue_out_frames")
+        title = trans.get("title", "")
+        artist = trans.get("artist", "")
+        transition_type = trans.get("transition_type", "bass_swap")
+        overlap_bars = trans.get("overlap_bars", 8)
+        hpf_freq = trans.get("hpf_frequency", 200.0)
+        lpf_freq = trans.get("lpf_frequency", 2500.0)
+        incoming_start_sec = trans.get("incoming_start_seconds")
+        next_track_id = trans.get("next_track_id")
+
+        # Section-aware timing: use outro_start if available for cue_out
+        outro_start = trans.get("outro_start_seconds")
+        if outro_start is not None and outro_start > 0:
+            cue_out_frames = int(outro_start * 44100)
+
+        cue_in_sec = _frames_to_seconds(cue_in_frames)
+        cue_out_sec = _frames_to_seconds(cue_out_frames)
+        stretch_ratio = _calculate_stretch_ratio(native_bpm, target_bpm)
+
+        effective_bpm = native_bpm if native_bpm and native_bpm > 0 else 128.0
+        bar_duration = 4 * 60.0 / effective_bpm
+        overlap_sec = overlap_bars * bar_duration
+
+        is_last_track = (next_track_id is None)
+        next_trans = transitions[idx + 1] if idx + 1 < len(transitions) else None
+
+        # === TRACK BODY ===
+        # Body: from cue_in (or after prev transition's incoming head) to transition start
+        body_var = f"body_{idx}"
+
+        # Determine body start: if this track is incoming from a previous transition,
+        # start from where the transition head ended
+        if idx > 0:
+            prev_trans = transitions[idx - 1]
+            prev_incoming_start = prev_trans.get("incoming_start_seconds")
+            if prev_incoming_start is not None:
+                body_cue_in = prev_incoming_start
+            else:
+                # Fallback: start from overlap_bars into the track
+                prev_overlap = prev_trans.get("overlap_bars", 8)
+                prev_bpm = prev_trans.get("bpm") or 128.0
+                body_cue_in = prev_overlap * 4 * 60.0 / prev_bpm
+        else:
+            body_cue_in = cue_in_sec
+
+        # Determine body end: where the transition zone starts
+        if is_last_track:
+            body_cue_out = cue_out_sec
+        else:
+            if cue_out_sec > overlap_sec:
+                body_cue_out = cue_out_sec - overlap_sec
+            else:
+                body_cue_out = cue_out_sec
+
+        script.append(f"# === TRACK {idx} BODY: {artist} - {title} ===" if artist else f"# === TRACK {idx} BODY ===")
+        script.append(f"#   BPM: {native_bpm} -> {target_bpm}, Stretch: {stretch_ratio:.3f}")
+
+        annotations = []
+        if body_cue_in > 0:
+            annotations.append(f"liq_cue_in={body_cue_in:.3f}")
+        if body_cue_out > 0:
+            annotations.append(f"liq_cue_out={body_cue_out:.3f}")
+
+        if annotations:
+            annotate_str = ",".join(annotations)
+            script.append(f'{body_var} = once(single("annotate:{annotate_str}:{file_path}"))')
+            script.append(f"{body_var} = cue_cut({body_var})")
+        else:
+            script.append(f'{body_var} = once(single("{file_path}"))')
+
+        if stretch_ratio != 1.0:
+            script.append(f"{body_var} = stretch(ratio={stretch_ratio:.3f}, {body_var})")
+
+        script.append("")
+        sequence_parts.append(body_var)
+
+        # === TRANSITION ZONE ===
+        if not is_last_track and next_trans:
+            next_file = next_trans.get("file_path", "")
+            next_bpm = next_trans.get("bpm")
+            next_target = next_trans.get("target_bpm", next_bpm)
+            next_stretch = _calculate_stretch_ratio(next_bpm, next_target)
+            next_drop_sec = trans.get("drop_position_seconds")
+
+            trans_var = f"transition_{idx}_{idx+1}"
+            out_var = f"t{idx}{idx+1}_out"
+            in_var = f"t{idx}{idx+1}_in"
+
+            script.append(f"# === TRANSITION {idx}->{idx+1}: {transition_type.upper()} ({overlap_bars} bars) ===")
+
+            if transition_type == "loop_hold" and trans.get("_loop_wav_path"):
+                # Outgoing: pre-extracted loop WAV
+                loop_wav = trans["_loop_wav_path"]
+                script.append(f'# Outgoing: pre-extracted loop')
+                script.append(f'{out_var} = once(single("{loop_wav}"))')
+                if stretch_ratio != 1.0:
+                    script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
+                script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
+                script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
+
+                # Incoming: first N bars filtered
+                in_cue_out = overlap_sec
+                script.append(f'# Incoming: first {overlap_bars} bars filtered')
+                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+                script.append(f"{in_var} = cue_cut({in_var})")
+                if next_stretch != 1.0:
+                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
+                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
+                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+
+            elif transition_type == "loop_roll" and trans.get("_loop_wav_path"):
+                # Outgoing: pre-extracted roll WAV
+                roll_wav = trans["_loop_wav_path"]
+                script.append(f'# Outgoing: progressive halving roll')
+                script.append(f'{out_var} = once(single("{roll_wav}"))')
+                if stretch_ratio != 1.0:
+                    script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
+                script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
+                script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
+
+                # Incoming: last half of overlap filtered
+                in_overlap_sec = overlap_sec / 2.0  # Fade in over last 8 bars of 16
+                script.append(f'# Incoming: last {overlap_bars // 2} bars of roll with filter')
+                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_overlap_sec:.3f}:{next_file}"))')
+                script.append(f"{in_var} = cue_cut({in_var})")
+                if next_stretch != 1.0:
+                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
+                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
+                script.append(f"{in_var} = fade.in(type=\"sin\", duration={in_overlap_sec:.1f}, {in_var})")
+
+            elif transition_type == "drop_swap":
+                # Short punchy transition: fast fade, no LPF on incoming
+                out_start = body_cue_out
+                out_end = cue_out_sec
+
+                script.append(f'# Outgoing: fast fade out')
+                script.append(f'{out_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
+                script.append(f"{out_var} = cue_cut({out_var})")
+                if stretch_ratio != 1.0:
+                    script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
+                script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
+
+                # Incoming at drop position: NO LPF for full-power entry
+                drop_sec = next_drop_sec if next_drop_sec else 0.0
+                drop_end = drop_sec + overlap_sec
+                script.append(f'# Incoming: at drop, full power (no LPF)')
+                script.append(f'{in_var} = once(single("annotate:liq_cue_in={drop_sec:.3f},liq_cue_out={drop_end:.3f}:{next_file}"))')
+                script.append(f"{in_var} = cue_cut({in_var})")
+                if next_stretch != 1.0:
+                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
+                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+
+            elif transition_type == "eq_blend":
+                # Long gradual blend (32 bars)
+                out_start = body_cue_out
+                out_end = cue_out_sec
+
+                script.append(f'# Outgoing: slow EQ blend out ({overlap_bars} bars)')
+                script.append(f'{out_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
+                script.append(f"{out_var} = cue_cut({out_var})")
+                if stretch_ratio != 1.0:
+                    script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
+                script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
+                script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
+
+                # Incoming: long fade in with LPF
+                in_cue_out = overlap_sec
+                script.append(f'# Incoming: slow EQ blend in ({overlap_bars} bars)')
+                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+                script.append(f"{in_var} = cue_cut({in_var})")
+                if next_stretch != 1.0:
+                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
+                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
+                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+
+            else:
+                # bass_swap (default)
+                out_start = body_cue_out
+                out_end = cue_out_sec
+
+                script.append(f'# Outgoing: HPF bass kill + fade out')
+                script.append(f'{out_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
+                script.append(f"{out_var} = cue_cut({out_var})")
+                if stretch_ratio != 1.0:
+                    script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
+                script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
+                script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
+
+                # Incoming: LPF warmth + fade in
+                in_cue_out = overlap_sec
+                script.append(f'# Incoming: LPF warmth + fade in')
+                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+                script.append(f"{in_var} = cue_cut({in_var})")
+                if next_stretch != 1.0:
+                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
+                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
+                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+
+            # Layer outgoing + incoming
+            script.append(f"{trans_var} = add(normalize=false, [{out_var}, {in_var}])")
+            script.append("")
+            sequence_parts.append(trans_var)
+
+    # === ASSEMBLY ===
+    script.append("# === ASSEMBLY ===")
+    if len(sequence_parts) == 1:
+        script.append(f"mixed = {sequence_parts[0]}")
+    else:
+        parts_str = ", ".join(sequence_parts)
+        script.append(f"mixed = sequence([{parts_str}])")
+    script.append("")
+
+    # === MASTER PROCESSING ===
+    script.append("# === MASTER PROCESSING ===")
+    script.append("# Sub-bass rumble removal (< 30Hz)")
+    script.append("mixed = filter.iir.butterworth.high(frequency=30.0, order=2, mixed)")
+    script.append("")
+    script.append("# Soft limiter (prevent clipping from overlapping transitions)")
+    script.append("mixed = compress(threshold=-1.0, ratio=20.0, attack=0.1, release=50.0, mixed)")
+    script.append("")
+
+    # === OUTPUT ===
+    script.append("# === OUTPUT ===")
+    if output_format == "mp3":
+        script.append(
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", '
+            f'fallible=true, on_stop=shutdown, clock(sync="none", mixed))'
+        )
+    elif output_format == "flac":
+        script.append(
+            f'output.file(%flac, "{output_path}", '
+            f'fallible=true, on_stop=shutdown, clock(sync="none", mixed))'
+        )
+    else:
+        script.append(
+            f'output.file(%mp3(bitrate={mp3_bitrate}), "{output_path}", '
+            f'fallible=true, on_stop=shutdown, clock(sync="none", mixed))'
+        )
     script.append("")
 
     return "\n".join(script)
@@ -698,7 +1070,7 @@ def _validate_output_file(output_path: str) -> bool:
         return False
 
 
-def _write_mix_metadata(output_path: str, playlist_id: str, timestamp: str) -> bool:
+def _write_mix_metadata(output_path: str, playlist_id: str, timestamp: str, transitions: Optional[list] = None) -> bool:
     """
     Write ID3 metadata to output mix file (SPEC.md § 4.4).
 
@@ -706,6 +1078,7 @@ def _write_mix_metadata(output_path: str, playlist_id: str, timestamp: str) -> b
         output_path: Path to output file
         playlist_id: Playlist identifier
         timestamp: Generation timestamp (ISO format)
+        transitions: Optional list of transition dicts for richer metadata
 
     Returns:
         True if successful, False otherwise
@@ -720,10 +1093,42 @@ def _write_mix_metadata(output_path: str, playlist_id: str, timestamp: str) -> b
         album_name = f"AutoDJ Mix {timestamp[:10]}"  # YYYY-MM-DD
         genre = "DJ Mix"
 
+        # Build richer title/artist from transitions metadata
+        title = f"AutoDJ Mix {timestamp[:10]}"
+        artist = "AutoDJ"
+        if transitions:
+            # Use seed track (first) artist for title
+            seed_artist = transitions[0].get("artist")
+            if seed_artist:
+                title = f"AutoDJ Mix - {seed_artist} et al."
+                artist = "AutoDJ"
+
         # Handle MP3 files
         if output_path.lower().endswith('.mp3'):
             try:
-                audio = EasyID3(output_path)
+                # Try to read/create ID3 tags
+                try:
+                    audio = EasyID3(output_path)
+                except Exception as e:
+                    # If ID3 header missing, initialize it using mutagen's ID3 class
+                    if "doesn't start with an ID3 tag" in str(e):
+                        logger.debug(f"Initializing ID3v2 header for {output_path}")
+                        from mutagen.id3 import ID3
+                        try:
+                            # Create empty ID3v2.4 tag
+                            audio = ID3()
+                            audio.save(output_path, v2_version=4)
+                            # Now read it back as EasyID3
+                            audio = EasyID3(output_path)
+                        except Exception as init_err:
+                            logger.warning(f"Failed to initialize ID3 header: {init_err}")
+                            return False
+                    else:
+                        raise
+
+                # Write metadata
+                audio['title'] = title
+                audio['artist'] = artist
                 audio['album'] = album_name
                 audio['genre'] = genre
                 audio['date'] = year
@@ -737,6 +1142,8 @@ def _write_mix_metadata(output_path: str, playlist_id: str, timestamp: str) -> b
         elif output_path.lower().endswith('.flac'):
             try:
                 audio = FLAC(output_path)
+                audio['title'] = title
+                audio['artist'] = artist
                 audio['album'] = album_name
                 audio['genre'] = genre
                 audio['date'] = year
@@ -835,7 +1242,7 @@ class RenderEngine:
                 trans["file_path"] = file_paths[idx]
 
         # Generate script
-        script = _generate_liquidsoap_script(plan, output_path, self.config, playlist_m3u_path)
+        script = _generate_liquidsoap_script_legacy(plan, output_path, self.config, playlist_m3u_path)
         if not script:
             logger.error("Failed to generate Liquidsoap script")
             return False
@@ -881,7 +1288,7 @@ class RenderEngine:
             # Add metadata to output
             playlist_id = plan.get("playlist_id", "autodj-playlist")
             timestamp = datetime.now().isoformat()
-            _write_mix_metadata(output_path, playlist_id, timestamp)
+            _write_mix_metadata(output_path, playlist_id, timestamp, transitions=plan.get("transitions"))
 
             logger.info(f"✅ Render complete: {output_path}")
             return True

@@ -4,11 +4,20 @@ Playlist and Transition Plan Generation (ArchwizardPhonemius).
 Per SPEC.md § 4.3 (Transition Plan):
 - Output: playlist.m3u and transitions.json
 - Transitions contain: mix_in, hold_duration, target_bpm, exit_cue, effect, etc.
+
+Pro DJ mixing engine supports 5 transition types:
+- bass_swap: Standard HPF out + LPF in (default)
+- loop_hold: Hold outgoing loop, bring in incoming filtered
+- drop_swap: Cut at breakdown, slam incoming at drop
+- loop_roll: Progressive halving buildup (8->4->2->1 bars)
+- eq_blend: Long gradual 3-band EQ swap (32 bars)
 """
 
 import json
 import logging
 import random
+from enum import Enum
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
@@ -16,6 +25,31 @@ from datetime import datetime
 from .selector import MerlinGreedySelector, SelectionConstraints
 
 logger = logging.getLogger(__name__)
+
+
+class TransitionType(Enum):
+    """Available transition types for pro DJ mixing."""
+    BASS_SWAP = "bass_swap"
+    LOOP_HOLD = "loop_hold"
+    DROP_SWAP = "drop_swap"
+    LOOP_ROLL = "loop_roll"
+    EQ_BLEND = "eq_blend"
+
+
+@dataclass
+class TransitionSpec:
+    """Specification for a single transition between two tracks."""
+    type: TransitionType
+    overlap_bars: int                                  # 8, 16, or 32 bars of overlap
+    outgoing_end_seconds: float                        # Where outgoing track body stops
+    incoming_start_seconds: float                      # Where incoming track body picks up after transition
+    loop_start_seconds: Optional[float] = None         # Loop source region start
+    loop_end_seconds: Optional[float] = None           # Loop source region end
+    loop_bars: Optional[int] = None                    # Loop size in bars
+    loop_repeats: Optional[int] = None                 # Number of loop repetitions
+    roll_stages: Optional[list] = None                 # For loop_roll: [(bars, reps), ...]
+    hpf_frequency: float = 200.0                       # Bass kill cutoff
+    lpf_frequency: float = 2500.0                      # Incoming warmth cutoff
 
 
 class TransitionPlan:
@@ -33,6 +67,25 @@ class TransitionPlan:
         effect: str = "smart_crossfade",
         next_track_id: Optional[int] = None,
         file_path: Optional[str] = None,
+        bpm: Optional[float] = None,
+        cue_in_frames: Optional[int] = None,
+        cue_out_frames: Optional[int] = None,
+        title: Optional[str] = None,
+        artist: Optional[str] = None,
+        outro_start_seconds: Optional[float] = None,
+        drop_position_seconds: Optional[float] = None,
+        sections_json: Optional[str] = None,
+        # Pro DJ v2 fields (all default for backward compat)
+        transition_type: str = "bass_swap",
+        overlap_bars: int = 8,
+        incoming_start_seconds: Optional[float] = None,
+        loop_start_seconds: Optional[float] = None,
+        loop_end_seconds: Optional[float] = None,
+        loop_bars: Optional[int] = None,
+        loop_repeats: Optional[int] = None,
+        roll_stages: Optional[str] = None,
+        hpf_frequency: float = 200.0,
+        lpf_frequency: float = 2500.0,
     ):
         """
         Args:
@@ -45,6 +98,25 @@ class TransitionPlan:
             mix_out_seconds: Crossfade duration
             effect: Transition effect ("smart_crossfade", "filter_swap", etc.)
             next_track_id: ID of following track
+            file_path: Absolute path to audio file
+            bpm: Native BPM from analysis
+            cue_in_frames: Cue-in frame offset from analysis
+            cue_out_frames: Cue-out frame offset from analysis
+            title: Track title
+            artist: Track artist
+            outro_start_seconds: Where outgoing track's outro begins
+            drop_position_seconds: Where incoming track's first drop is
+            sections_json: Serialized sections for render reference
+            transition_type: One of TransitionType values
+            overlap_bars: Bars of overlap between tracks
+            incoming_start_seconds: Where incoming body starts after transition
+            loop_start_seconds: Loop source region start
+            loop_end_seconds: Loop source region end
+            loop_bars: Loop size in bars
+            loop_repeats: Number of loop repetitions
+            roll_stages: JSON array of (bars, reps) tuples
+            hpf_frequency: Bass kill cutoff Hz
+            lpf_frequency: Incoming warmth cutoff Hz
         """
         self.track_index = track_index
         self.track_id = track_id
@@ -56,10 +128,29 @@ class TransitionPlan:
         self.effect = effect
         self.next_track_id = next_track_id
         self.file_path = file_path
+        self.bpm = bpm
+        self.cue_in_frames = cue_in_frames
+        self.cue_out_frames = cue_out_frames
+        self.title = title
+        self.artist = artist
+        self.outro_start_seconds = outro_start_seconds
+        self.drop_position_seconds = drop_position_seconds
+        self.sections_json = sections_json
+        # Pro DJ v2 fields
+        self.transition_type = transition_type
+        self.overlap_bars = overlap_bars
+        self.incoming_start_seconds = incoming_start_seconds
+        self.loop_start_seconds = loop_start_seconds
+        self.loop_end_seconds = loop_end_seconds
+        self.loop_bars = loop_bars
+        self.loop_repeats = loop_repeats
+        self.roll_stages = roll_stages
+        self.hpf_frequency = hpf_frequency
+        self.lpf_frequency = lpf_frequency
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
-        return {
+        d = {
             "track_index": self.track_index,
             "track_id": self.track_id,
             "entry_cue": self.entry_cue,
@@ -70,7 +161,35 @@ class TransitionPlan:
             "effect": self.effect,
             "next_track_id": self.next_track_id,
             "file_path": self.file_path,
+            "bpm": self.bpm,
+            "cue_in_frames": self.cue_in_frames,
+            "cue_out_frames": self.cue_out_frames,
+            "title": self.title,
+            "artist": self.artist,
+            "transition_type": self.transition_type,
+            "overlap_bars": self.overlap_bars,
+            "hpf_frequency": self.hpf_frequency,
+            "lpf_frequency": self.lpf_frequency,
         }
+        if self.outro_start_seconds is not None:
+            d["outro_start_seconds"] = self.outro_start_seconds
+        if self.drop_position_seconds is not None:
+            d["drop_position_seconds"] = self.drop_position_seconds
+        if self.sections_json is not None:
+            d["sections_json"] = self.sections_json
+        if self.incoming_start_seconds is not None:
+            d["incoming_start_seconds"] = self.incoming_start_seconds
+        if self.loop_start_seconds is not None:
+            d["loop_start_seconds"] = self.loop_start_seconds
+        if self.loop_end_seconds is not None:
+            d["loop_end_seconds"] = self.loop_end_seconds
+        if self.loop_bars is not None:
+            d["loop_bars"] = self.loop_bars
+        if self.loop_repeats is not None:
+            d["loop_repeats"] = self.loop_repeats
+        if self.roll_stages is not None:
+            d["roll_stages"] = self.roll_stages
+        return d
 
 
 class ArchwizardPhonemius:
@@ -137,6 +256,9 @@ class ArchwizardPhonemius:
         """
         Plan transitions between consecutive tracks.
 
+        Uses section data from track_analysis (if available) for
+        musically intelligent mix points and transition type selection.
+
         Args:
             track_ids: Ordered list of track IDs
             library_dict: Track metadata lookup dict
@@ -145,56 +267,340 @@ class ArchwizardPhonemius:
             List of TransitionPlan objects
         """
         transitions = []
+        fallback_xfade = self.config.get("render", {}).get("crossfade_duration_seconds", 4.0)
+
+        # Load rich analysis data for all tracks (if available)
+        analysis_cache = {}
+        if self.db:
+            for tid in track_ids:
+                try:
+                    analysis = self.db.get_track_analysis(tid)
+                    if analysis:
+                        analysis_cache[tid] = analysis
+                except Exception:
+                    pass
+
+        prev_transition_type = None
 
         for idx, track_id in enumerate(track_ids):
             track = library_dict.get(track_id, {})
             next_track_id = track_ids[idx + 1] if idx + 1 < len(track_ids) else None
 
-            # Determine transition parameters
-            hold_duration_bars = 16  # 16 bars at current BPM
-            mix_out_seconds = self.config.get("render", {}).get("crossfade_duration_seconds", 4.0)
-            effect = self._select_transition_effect(track.get("key"), track_ids[idx + 1] if next_track_id else None, library_dict)
+            # Native BPM from analysis
+            native_bpm = track.get("bpm")
+
+            # Target BPM: midpoint with next track for smooth progression
+            if next_track_id and native_bpm:
+                next_track = library_dict.get(next_track_id, {})
+                next_bpm = next_track.get("bpm")
+                if next_bpm:
+                    target_bpm = (native_bpm + next_bpm) / 2.0
+                else:
+                    target_bpm = native_bpm
+            else:
+                target_bpm = native_bpm
+
+            # Extract section-aware timing from rich analysis
+            outro_start_seconds = None
+            drop_position_seconds = None
+            sections_json = None
+
+            # Outgoing track: use outro start from analysis
+            track_analysis = analysis_cache.get(track_id)
+            if track_analysis:
+                cue_points = track_analysis.get("cue_points")
+                if cue_points:
+                    mix_out_cue = next(
+                        (c for c in cue_points if c.get("label") == "mix_out"), None
+                    )
+                    if mix_out_cue:
+                        outro_start_seconds = mix_out_cue.get("position_seconds")
+                sections = track_analysis.get("sections")
+                if sections:
+                    sections_json = json.dumps(sections)
+
+            # Incoming track: use drop position from analysis
+            next_analysis = None
+            if next_track_id:
+                next_analysis = analysis_cache.get(next_track_id)
+                if next_analysis:
+                    next_cue_points = next_analysis.get("cue_points")
+                    if next_cue_points:
+                        drop_cue = next(
+                            (c for c in next_cue_points if c.get("label") == "drop_1"), None
+                        )
+                        if drop_cue:
+                            drop_position_seconds = drop_cue.get("position_seconds")
+
+            # Choose transition type using pro DJ decision engine
+            transition_spec = self._choose_transition(
+                outgoing_analysis=track_analysis,
+                incoming_analysis=next_analysis,
+                outgoing_track=track,
+                incoming_track=library_dict.get(next_track_id, {}) if next_track_id else None,
+                prev_type=prev_transition_type,
+                bpm=native_bpm or 128.0,
+            )
+
+            # Compute bar-aligned mix_out from overlap_bars
+            effective_bpm = native_bpm if native_bpm and native_bpm > 0 else 128.0
+            mix_out_seconds = transition_spec.overlap_bars * 4 * 60.0 / effective_bpm
+
+            prev_transition_type = transition_spec.type
 
             plan = TransitionPlan(
                 track_index=idx,
                 track_id=track_id,
                 entry_cue="cue_in",
-                hold_duration_bars=hold_duration_bars,
-                target_bpm=track.get("bpm"),
+                hold_duration_bars=16,
+                target_bpm=target_bpm,
                 exit_cue="cue_out",
                 mix_out_seconds=mix_out_seconds,
-                effect=effect,
+                effect="smart_crossfade",
                 next_track_id=next_track_id,
+                file_path=track.get("file_path"),
+                bpm=native_bpm,
+                cue_in_frames=track.get("cue_in_frames"),
+                cue_out_frames=track.get("cue_out_frames"),
+                title=track.get("title"),
+                artist=track.get("artist"),
+                outro_start_seconds=outro_start_seconds,
+                drop_position_seconds=drop_position_seconds,
+                sections_json=sections_json,
+                transition_type=transition_spec.type.value,
+                overlap_bars=transition_spec.overlap_bars,
+                incoming_start_seconds=transition_spec.incoming_start_seconds,
+                loop_start_seconds=transition_spec.loop_start_seconds,
+                loop_end_seconds=transition_spec.loop_end_seconds,
+                loop_bars=transition_spec.loop_bars,
+                loop_repeats=transition_spec.loop_repeats,
+                roll_stages=json.dumps(transition_spec.roll_stages) if transition_spec.roll_stages else None,
+                hpf_frequency=transition_spec.hpf_frequency,
+                lpf_frequency=transition_spec.lpf_frequency,
             )
             transitions.append(plan)
 
         logger.info(f"Planned {len(transitions)} transitions")
         return transitions
 
-    def _select_transition_effect(self, current_key: Optional[str], next_track_id: Optional[str], library_dict: Dict[str, Dict[str, Any]]) -> str:
+    def _choose_transition(
+        self,
+        outgoing_analysis: Optional[Dict],
+        incoming_analysis: Optional[Dict],
+        outgoing_track: Dict[str, Any],
+        incoming_track: Optional[Dict[str, Any]],
+        prev_type: Optional[TransitionType],
+        bpm: float = 128.0,
+    ) -> TransitionSpec:
         """
-        Select appropriate transition effect based on harmonic context.
+        Choose transition type and parameters based on track analysis data.
+
+        Greedy scoring — same philosophy as MerlinGreedySelector.choose_next().
+        Scores each transition type, picks highest, avoids repeating prev_type.
 
         Args:
-            current_key: Current track key
-            next_track_id: ID of next track (or None if final)
-            library_dict: Track metadata lookup
+            outgoing_analysis: Rich analysis dict for outgoing track (or None)
+            incoming_analysis: Rich analysis dict for incoming track (or None)
+            outgoing_track: Track metadata dict for outgoing track
+            incoming_track: Track metadata dict for incoming track (or None)
+            prev_type: Previous transition type (to avoid consecutive repeats)
+            bpm: BPM for bar duration calculations
 
         Returns:
-            Effect name ("smart_crossfade", "filter_swap", etc.)
+            TransitionSpec with chosen type and parameters
         """
-        if not next_track_id:
-            return "smart_crossfade"  # Default for final track
+        # No next track = final track, just use bass_swap default
+        if incoming_track is None:
+            return TransitionSpec(
+                type=TransitionType.BASS_SWAP,
+                overlap_bars=8,
+                outgoing_end_seconds=0.0,
+                incoming_start_seconds=0.0,
+            )
 
-        next_track = library_dict.get(next_track_id, {})
-        next_key = next_track.get("key")
+        bar_duration = 4 * 60.0 / bpm  # seconds per bar
 
-        # If keys match exactly, use simple crossfade
-        if current_key == next_key:
-            return "smart_crossfade"
+        # Extract loop regions from outgoing analysis
+        out_loops = []
+        out_sections = []
+        if outgoing_analysis:
+            out_loops = outgoing_analysis.get("loop_regions", [])
+            out_sections = outgoing_analysis.get("sections", [])
 
-        # Default to smart crossfade (handles key/BPM matching)
-        return "smart_crossfade"
+        # Extract sections from incoming analysis
+        in_sections = []
+        in_cue_points = []
+        if incoming_analysis:
+            in_sections = incoming_analysis.get("sections", [])
+            in_cue_points = incoming_analysis.get("cue_points", [])
+
+        # Find best outgoing loop (prefer outro_loop, then drop_loop)
+        best_loop = None
+        for label_pref in ["outro_loop", "drop_loop", "intro_loop"]:
+            for loop in out_loops:
+                if loop.get("label") == label_pref and loop.get("stability", 0) > 0.6:
+                    best_loop = loop
+                    break
+            if best_loop:
+                break
+
+        # Find incoming drop position
+        incoming_drop_seconds = None
+        for cue in in_cue_points:
+            if cue.get("label") == "drop_1":
+                incoming_drop_seconds = cue.get("position_seconds")
+                break
+
+        # Find incoming intro section
+        has_incoming_intro = any(
+            s.get("label") == "intro" for s in in_sections
+        )
+
+        # Find outgoing breakdown near end
+        has_outgoing_breakdown = any(
+            s.get("label") in ("breakdown", "outro") for s in out_sections
+        )
+
+        # Check energy levels
+        out_energy = outgoing_track.get("energy", 0.5)
+        in_energy = (incoming_track or {}).get("energy", 0.5)
+
+        # Check key compatibility (for eq_blend preference)
+        out_key = outgoing_track.get("key", "")
+        in_key = (incoming_track or {}).get("key", "")
+        keys_similar = _are_keys_compatible(out_key, in_key)
+
+        # Score each transition type
+        scores = {}
+
+        # BASS_SWAP: default, always available (score 1.0)
+        scores[TransitionType.BASS_SWAP] = 1.0
+
+        # LOOP_HOLD: outgoing has stable loop + incoming has intro
+        if best_loop and has_incoming_intro:
+            scores[TransitionType.LOOP_HOLD] = 3.0
+        elif best_loop:
+            scores[TransitionType.LOOP_HOLD] = 2.0
+
+        # DROP_SWAP: incoming has strong drop + outgoing has breakdown
+        if incoming_drop_seconds and incoming_drop_seconds > 10.0 and has_outgoing_breakdown:
+            scores[TransitionType.DROP_SWAP] = 3.5
+        elif incoming_drop_seconds and incoming_drop_seconds > 10.0:
+            scores[TransitionType.DROP_SWAP] = 2.0
+
+        # LOOP_ROLL: outgoing has drop loop + high energy
+        drop_loop = None
+        for loop in out_loops:
+            if loop.get("label") == "drop_loop" and loop.get("stability", 0) > 0.5:
+                drop_loop = loop
+                break
+        if drop_loop and out_energy > 0.6:
+            scores[TransitionType.LOOP_ROLL] = 2.5
+
+        # EQ_BLEND: similar energy + compatible keys (only when we have real energy data)
+        has_energy_data = "energy" in outgoing_track and "energy" in (incoming_track or {})
+        if has_energy_data and keys_similar and abs(out_energy - in_energy) < 0.2:
+            scores[TransitionType.EQ_BLEND] = 2.0
+
+        # Variety rule: heavily penalize repeating previous type
+        if prev_type and prev_type in scores:
+            scores[prev_type] *= 0.1  # Near-zero penalty for consecutive repeat
+
+        # Pick highest-scoring type
+        best_type = max(scores, key=scores.get)
+
+        # Build TransitionSpec based on chosen type
+        return self._build_transition_spec(
+            best_type, best_loop, drop_loop, incoming_drop_seconds,
+            bpm, bar_duration, outgoing_analysis, incoming_analysis,
+        )
+
+    def _build_transition_spec(
+        self,
+        transition_type: TransitionType,
+        best_loop: Optional[Dict],
+        drop_loop: Optional[Dict],
+        incoming_drop_seconds: Optional[float],
+        bpm: float,
+        bar_duration: float,
+        outgoing_analysis: Optional[Dict],
+        incoming_analysis: Optional[Dict],
+    ) -> TransitionSpec:
+        """Build a TransitionSpec for the chosen transition type."""
+
+        if transition_type == TransitionType.LOOP_HOLD:
+            loop = best_loop or {}
+            loop_start = loop.get("start_seconds", 0.0)
+            loop_end = loop.get("end_seconds", loop_start + 8 * bar_duration)
+            loop_bars = loop.get("length_bars", 8)
+            loop_repeats = 2  # 2x loop = 16 bars total
+            overlap_bars = loop_bars * loop_repeats
+            incoming_start = overlap_bars * bar_duration
+            return TransitionSpec(
+                type=TransitionType.LOOP_HOLD,
+                overlap_bars=overlap_bars,
+                outgoing_end_seconds=loop_start,
+                incoming_start_seconds=incoming_start,
+                loop_start_seconds=loop_start,
+                loop_end_seconds=loop_end,
+                loop_bars=loop_bars,
+                loop_repeats=loop_repeats,
+            )
+
+        elif transition_type == TransitionType.DROP_SWAP:
+            overlap_bars = 4
+            overlap_sec = overlap_bars * bar_duration
+            incoming_start = incoming_drop_seconds if incoming_drop_seconds else 0.0
+            return TransitionSpec(
+                type=TransitionType.DROP_SWAP,
+                overlap_bars=overlap_bars,
+                outgoing_end_seconds=0.0,  # Render will use cue_out minus overlap
+                incoming_start_seconds=incoming_start + overlap_sec,
+                hpf_frequency=200.0,
+                lpf_frequency=20000.0,  # No LPF on incoming for full-power drop entry
+            )
+
+        elif transition_type == TransitionType.LOOP_ROLL:
+            loop = drop_loop or {}
+            loop_start = loop.get("start_seconds", 0.0)
+            loop_end = loop.get("end_seconds", loop_start + 8 * bar_duration)
+            # Progressive halving: 8->4->2->1 bars = 16 bars total
+            roll_stages = [(8, 1), (4, 1), (2, 1), (1, 2)]
+            overlap_bars = 16
+            incoming_start = overlap_bars * bar_duration
+            return TransitionSpec(
+                type=TransitionType.LOOP_ROLL,
+                overlap_bars=overlap_bars,
+                outgoing_end_seconds=loop_start,
+                incoming_start_seconds=incoming_start,
+                loop_start_seconds=loop_start,
+                loop_end_seconds=loop_end,
+                loop_bars=8,
+                roll_stages=roll_stages,
+            )
+
+        elif transition_type == TransitionType.EQ_BLEND:
+            overlap_bars = 32
+            incoming_start = overlap_bars * bar_duration
+            return TransitionSpec(
+                type=TransitionType.EQ_BLEND,
+                overlap_bars=overlap_bars,
+                outgoing_end_seconds=0.0,
+                incoming_start_seconds=incoming_start,
+                hpf_frequency=800.0,   # Mid-range HPF for gradual blend
+                lpf_frequency=800.0,   # Mid-range LPF for warmth
+            )
+
+        else:
+            # BASS_SWAP (default)
+            overlap_bars = 8
+            incoming_start = overlap_bars * bar_duration
+            return TransitionSpec(
+                type=TransitionType.BASS_SWAP,
+                overlap_bars=overlap_bars,
+                outgoing_end_seconds=0.0,
+                incoming_start_seconds=incoming_start,
+            )
 
     def build_playlist(
         self,
@@ -243,6 +649,46 @@ class ArchwizardPhonemius:
         return (track_ids, transitions)
 
 
+def _are_keys_compatible(key_a: str, key_b: str) -> bool:
+    """
+    Check if two Camelot keys are compatible (same, adjacent, or parallel).
+
+    Args:
+        key_a: Camelot key (e.g., "8A", "5B") or empty/unknown
+        key_b: Camelot key or empty/unknown
+
+    Returns:
+        True if harmonically compatible
+    """
+    if not key_a or not key_b:
+        return True  # Unknown = wildcard
+
+    # Parse Camelot notation
+    try:
+        num_a = int(key_a[:-1])
+        mode_a = key_a[-1].upper()
+        num_b = int(key_b[:-1])
+        mode_b = key_b[-1].upper()
+    except (ValueError, IndexError):
+        return True  # Can't parse = wildcard
+
+    # Same key
+    if num_a == num_b and mode_a == mode_b:
+        return True
+
+    # Parallel mode (same number, different letter)
+    if num_a == num_b:
+        return True
+
+    # Adjacent (±1 on wheel, same mode)
+    if mode_a == mode_b:
+        diff = abs(num_a - num_b)
+        if diff == 1 or diff == 11:  # 12-position wheel wraps
+            return True
+
+    return False
+
+
 def generate(
     track_ids: Optional[List[str]] = None,
     library: Optional[List[Dict[str, Any]]] = None,
@@ -289,16 +735,10 @@ def generate(
         logger.error("Either (target_duration_minutes + database) or (track_ids + library) required")
         return None
     else:
-        # Generate basic transitions for direct mode
+        # Direct mode: use ArchwizardPhonemius for transition planning
         library_dict = {t.get("id"): t for t in library}
-        transitions = [
-            TransitionPlan(
-                track_index=idx,
-                track_id=tid,
-                next_track_id=track_ids[idx + 1] if idx + 1 < len(track_ids) else None,
-            )
-            for idx, tid in enumerate(track_ids)
-        ]
+        phonemius = ArchwizardPhonemius(database, config)
+        transitions = phonemius._plan_transitions(track_ids, library_dict)
 
     # Common: Write output files
     output_path = Path(output_dir)
@@ -321,12 +761,13 @@ def generate(
 
     total_duration = sum(library_dict.get(tid, {}).get("duration_seconds", 0) for tid in track_ids)
 
-    # Populate file_path on transitions so renderer can operate without relying on temp M3U files
+    # Fill file_path on transitions that don't already have one
     for idx, t in enumerate(transitions):
-        try:
-            t.file_path = track_paths[idx]
-        except Exception:
-            t.file_path = None
+        if not t.file_path:
+            try:
+                t.file_path = track_paths[idx]
+            except Exception:
+                t.file_path = None
 
     if not write_transitions(transitions, "autodj-playlist", int(total_duration), transitions_path):
         logger.error("Failed to write transitions")

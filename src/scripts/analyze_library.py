@@ -76,6 +76,77 @@ def _get_audio_duration(file_path: str) -> float:
         return 0.0
 
 
+def _extract_id3_metadata(file_path: str) -> tuple:
+    """
+    Extract title, artist, album from ID3 tags.
+
+    Args:
+        file_path: Path to audio file.
+
+    Returns:
+        Tuple (title, artist, album) with fallbacks to None or filename.
+    """
+    try:
+        import mutagen
+        from pathlib import Path as PathlibPath
+
+        file_ext = PathlibPath(file_path).suffix.lower()
+        title = None
+        artist = None
+        album = None
+
+        if file_ext in [".m4a", ".mp4", ".aac"]:
+            # MP4/M4A tagging
+            from mutagen.mp4 import MP4
+
+            try:
+                audio = MP4(file_path)
+                # MP4 tags: \xa9nam = name, \xa9ART = artist, \xa9alb = album
+                title = audio.get("\xa9nam", [None])[0] if "\xa9nam" in audio else None
+                artist = audio.get("\xa9ART", [None])[0] if "\xa9ART" in audio else None
+                album = audio.get("\xa9alb", [None])[0] if "\xa9alb" in audio else None
+            except Exception as e:
+                logger.debug(f"Could not read MP4 tags from {file_path}: {e}")
+
+        elif file_ext in [".mp3"]:
+            # ID3 tagging for MP3
+            from mutagen.easyid3 import EasyID3
+
+            try:
+                audio = EasyID3(file_path)
+                title = audio.get("title", [None])[0]
+                artist = audio.get("artist", [None])[0]
+                album = audio.get("album", [None])[0]
+            except Exception as e:
+                logger.debug(f"Could not read ID3 tags from {file_path}: {e}")
+
+        elif file_ext in [".flac"]:
+            # FLAC tagging
+            from mutagen.flac import FLAC
+
+            try:
+                audio = FLAC(file_path)
+                title = audio.get("title", [None])[0] if "title" in audio else None
+                artist = audio.get("artist", [None])[0] if "artist" in audio else None
+                album = audio.get("album", [None])[0] if "album" in audio else None
+            except Exception as e:
+                logger.debug(f"Could not read FLAC tags from {file_path}: {e}")
+
+        # Fallback to filename if title not in tags
+        if not title:
+            title = PathlibPath(file_path).stem
+
+        # Fallback to "Unknown" if artist not in tags
+        if not artist:
+            artist = "Unknown"
+
+        return title, artist, album
+
+    except Exception as e:
+        logger.debug(f"ID3 extraction failed for {file_path}: {e}")
+        return PathlibPath(file_path).stem, "Unknown", None
+
+
 def _write_id3_tags(file_path: str, bpm: float = None, key: str = None) -> None:
     """
     Write BPM and key to tags (ID3 for MP3, MP4 for M4A/ALAC).
@@ -143,9 +214,15 @@ def _write_id3_tags(file_path: str, bpm: float = None, key: str = None) -> None:
         logger.warning(f"Tag writing failed for {file_path}: {e}")
 
 
+EXCLUDE_DIRS = {"automix", "autodj-output", "mixes"}
+
+
 def discover_audio_files(library_path: str = "data/music") -> list:
     """
     Discover all audio files in music library.
+
+    Excludes directories matching EXCLUDE_DIRS (e.g. automix/) to avoid
+    re-analyzing our own generated DJ mixes.
 
     Args:
         library_path: Path to music library directory.
@@ -161,8 +238,12 @@ def discover_audio_files(library_path: str = "data/music") -> list:
 
     audio_files = []
     for audio_format in AUDIO_FORMATS:
-        audio_files.extend(lib_path.rglob(f"*{audio_format}"))
-        audio_files.extend(lib_path.rglob(f"*{audio_format.upper()}"))
+        for f in lib_path.rglob(f"*{audio_format}"):
+            if not any(part in EXCLUDE_DIRS for part in f.parts):
+                audio_files.append(f)
+        for f in lib_path.rglob(f"*{audio_format.upper()}"):
+            if not any(part in EXCLUDE_DIRS for part in f.parts):
+                audio_files.append(f)
 
     logger.info(f"Found {len(audio_files)} audio files in {library_path}")
     return sorted(audio_files)
@@ -230,8 +311,14 @@ def analyze_track(
             loop_start = cues.loop_start
             loop_length = cues.loop_length
 
-        # Write ID3 tags
-        _write_id3_tags(str(file_path), bpm, key)
+        # Extract title, artist, album from ID3 tags
+        title, artist, album = _extract_id3_metadata(str(file_path))
+
+        # Write ID3 tags (non-fatal - skip if read-only filesystem)
+        try:
+            _write_id3_tags(str(file_path), bpm, key)
+        except Exception as tag_err:
+            logger.debug(f"  ID3 tag write skipped (read-only or error): {tag_err}")
 
         # Create metadata object
         metadata = TrackMetadata(
@@ -245,15 +332,95 @@ def analyze_track(
             loop_start_frames=loop_start,
             loop_length_bars=loop_length,
             analyzed_at=datetime.now().isoformat(),
-            title=Path(file_path).stem,
-            artist=None,
-            album=None,
+            title=title,
+            artist=artist,
+            album=album,
         )
 
         # Write to database
         db.add_track(metadata)
 
-        logger.info(f"  ✅ {bpm:.0f} BPM, Key: {key}")
+        # Phase 5: Rich structure analysis (MANDATORY for Pro DJ v2)
+        analysis_dict = None
+        structure = None
+        try:
+            from autodj.analyze.structure import analyze_track_structure
+            from autodj.analyze.audio_loader import AudioCache
+            from dataclasses import asdict
+
+            logger.debug("  → Analyzing structure (sections, loops, cues)...")
+            audio_cache = AudioCache(sample_rate=44100)
+            audio_data, sr = audio_cache.load(str(file_path), mono=True)
+            structure = analyze_track_structure(audio_data, sr, bpm)
+
+            analysis_dict = {
+                "sections": [asdict(s) for s in structure.sections],
+                "cue_points": [asdict(c) for c in structure.cue_points],
+                "loop_regions": [asdict(l) for l in structure.loop_regions],
+                "kick_pattern": structure.kick_pattern,
+                "downbeat_seconds": structure.downbeat_position,
+                "total_bars": structure.total_bars,
+                "has_vocal": structure.has_vocal,
+            }
+
+            logger.debug(f"  ✓ Structure analysis complete: {len(structure.sections)} sections")
+
+        except Exception as e:
+            logger.error(f"  ✗ CRITICAL: Structure analysis failed (required for Pro DJ v2): {type(e).__name__}: {e}", exc_info=True)
+            logger.warning(f"  Falling back to basic metadata only (will not have structure data)")
+
+        # Phase 3/4: Spectral/loudness analysis (optional enhancement)
+        if analysis_dict:
+            try:
+                from autodj.analyze.pipeline import DJAnalysisPipeline
+                from autodj.analyze.dsp_config import DSPConfig
+
+                logger.debug("  → Analyzing spectral/loudness (Phase 3/4)...")
+                pipeline = DJAnalysisPipeline(config=DSPConfig())
+                track_analysis = pipeline.analyze_track(
+                    str(file_path), bpm=bpm, camelot_key=key,
+                )
+
+                if track_analysis.spectral:
+                    analysis_dict["spectral"] = {
+                        "bass_energy": track_analysis.spectral.bass_energy,
+                        "mid_energy": track_analysis.spectral.mid_energy,
+                        "treble_energy": track_analysis.spectral.treble_energy,
+                        "kick_detected": track_analysis.spectral.kick_detected,
+                        "bassline_present": track_analysis.spectral.bassline_present,
+                    }
+                if track_analysis.loudness:
+                    analysis_dict["loudness"] = track_analysis.loudness.to_dict()
+
+                logger.debug(f"  ✓ Spectral/loudness analysis complete")
+                pipeline.audio_cache.clear()
+            except Exception as e:
+                logger.debug(f"  Phase 3/4 pipeline skipped (optional): {type(e).__name__}: {e}")
+
+        # Save analysis to database
+        if analysis_dict:
+            try:
+                db.save_track_analysis(track_id, analysis_dict)
+
+                # Update cue_in/cue_out to use semantic cues (if available)
+                if structure:
+                    mix_in = next((c for c in structure.cue_points if c.label == "mix_in"), None)
+                    mix_out = next((c for c in structure.cue_points if c.label == "mix_out"), None)
+                    if mix_in:
+                        metadata.cue_in_frames = int(mix_in.position_seconds * 44100)
+                    if mix_out:
+                        metadata.cue_out_frames = int(mix_out.position_seconds * 44100)
+                    if mix_in or mix_out:
+                        db.add_track(metadata)
+
+                audio_cache.clear()
+                logger.info(f"  ✅ Structure: {len(structure.sections)} sections, kick={structure.kick_pattern}")
+            except Exception as e:
+                logger.error(f"  Failed to save structure analysis: {e}", exc_info=True)
+        else:
+            logger.warning(f"  ⚠️  No structure data saved (structure analysis failed)")
+
+        logger.info(f"  ✅ {artist} — {title} | {bpm:.0f} BPM, Key: {key}")
         return True, metadata
 
     except Exception as e:
@@ -337,6 +504,39 @@ def main():
                 f"  BPM range:  {stats['bpm_stats']['min_bpm']:.0f} - "
                 f"{stats['bpm_stats']['max_bpm']:.0f} (avg: {stats['bpm_stats']['avg_bpm']:.0f})"
             )
+
+        # Diagnostics: Check Pro DJ v2 readiness
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("🔍 Pro DJ v2 Readiness Check")
+        logger.info("=" * 60)
+
+        try:
+            # Query structure analysis coverage (from track_analysis table)
+            conn = db.connection
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM track_analysis WHERE sections_json IS NOT NULL")
+            with_structure = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM tracks WHERE artist IS NOT NULL AND artist != 'Unknown'")
+            with_artist = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM tracks")
+            total = c.fetchone()[0]
+
+            structure_pct = (with_structure / total * 100) if total > 0 else 0
+            artist_pct = (with_artist / total * 100) if total > 0 else 0
+
+            logger.info(f"  Structure analysis:  {with_structure}/{total} ({structure_pct:.0f}%)")
+            logger.info(f"  Artist metadata:     {with_artist}/{total} ({artist_pct:.0f}%)")
+
+            if structure_pct >= 80:
+                logger.info(f"  ✅ Ready for Pro DJ v2 (all transition types available)")
+            elif structure_pct >= 50:
+                logger.info(f"  ⚠️  Partial Pro DJ v2 support ({structure_pct:.0f}% of features available)")
+            else:
+                logger.warning(f"  ❌ Not ready for Pro DJ v2 (structure analysis <50%)")
+
+        except Exception as diag_err:
+            logger.debug(f"Diagnostic query failed: {diag_err}")
 
         logger.info("=" * 60)
         logger.info("✅ Analysis complete")
