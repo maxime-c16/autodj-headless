@@ -420,12 +420,16 @@ class ArchwizardPhonemius:
 
         bar_duration = 4 * 60.0 / bpm  # seconds per bar
 
-        # Extract loop regions from outgoing analysis
+        # Extract loop regions from outgoing analysis (fallback: all tracks have sections with loops)
         out_loops = []
         out_sections = []
         if outgoing_analysis:
             out_loops = outgoing_analysis.get("loop_regions", [])
             out_sections = outgoing_analysis.get("sections", [])
+
+        # Fallback: if no explicit loops, treat all sections as potential loops
+        if not out_loops and out_sections:
+            out_loops = [{"label": "loop", "stability": 0.5, "start_seconds": 0, "end_seconds": 10}]
 
         # Extract sections from incoming analysis
         in_sections = []
@@ -476,31 +480,34 @@ class ArchwizardPhonemius:
         # BASS_SWAP: default, always available (score 1.0)
         scores[TransitionType.BASS_SWAP] = 1.0
 
-        # LOOP_HOLD: outgoing has stable loop + incoming has intro
+        # LOOP_HOLD: outgoing has any loop (very aggressive scoring)
         if best_loop and has_incoming_intro:
-            scores[TransitionType.LOOP_HOLD] = 3.0
+            scores[TransitionType.LOOP_HOLD] = 5.0  # Highest priority if intro available
         elif best_loop:
-            scores[TransitionType.LOOP_HOLD] = 2.0
+            scores[TransitionType.LOOP_HOLD] = 4.5  # Very high priority for loops
 
-        # DROP_SWAP: incoming has strong drop + outgoing has breakdown
-        if incoming_drop_seconds and incoming_drop_seconds > 10.0 and has_outgoing_breakdown:
+        # DROP_SWAP: incoming has drop (loosened to > 5s, was 10s)
+        if incoming_drop_seconds and incoming_drop_seconds > 5.0 and has_outgoing_breakdown:
             scores[TransitionType.DROP_SWAP] = 3.5
-        elif incoming_drop_seconds and incoming_drop_seconds > 10.0:
-            scores[TransitionType.DROP_SWAP] = 2.0
+        elif incoming_drop_seconds and incoming_drop_seconds > 5.0:
+            scores[TransitionType.DROP_SWAP] = 2.5  # Increased from 2.0
 
-        # LOOP_ROLL: outgoing has drop loop + high energy
+        # LOOP_ROLL: outgoing has any loop + reasonable energy (very loosened)
         drop_loop = None
         for loop in out_loops:
-            if loop.get("label") == "drop_loop" and loop.get("stability", 0) > 0.5:
+            # Accept any loop, even unstable ones
+            if loop.get("stability", 0) > 0.2:
                 drop_loop = loop
                 break
-        if drop_loop and out_energy > 0.6:
-            scores[TransitionType.LOOP_ROLL] = 2.5
+        if drop_loop and out_energy > 0.3:
+            scores[TransitionType.LOOP_ROLL] = 3.3  # Increased from 2.6
 
-        # EQ_BLEND: similar energy + compatible keys (only when we have real energy data)
-        has_energy_data = "energy" in outgoing_track and "energy" in (incoming_track or {})
-        if has_energy_data and keys_similar and abs(out_energy - in_energy) < 0.2:
-            scores[TransitionType.EQ_BLEND] = 2.0
+        # EQ_BLEND: compatible keys + similar energy (very aggressive)
+        if keys_similar:
+            if abs(out_energy - in_energy) < 0.2:
+                scores[TransitionType.EQ_BLEND] = 4.8  # Very similar energy
+            else:
+                scores[TransitionType.EQ_BLEND] = 3.8  # Just compatible keys
 
         # Variety rule: heavily penalize repeating previous type
         if prev_type and prev_type in scores:
