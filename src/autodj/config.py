@@ -30,7 +30,7 @@ class Config:
             "max_playlist_tracks": (10, 150),
         },
         "constraints": {
-            "bpm_tolerance_percent": (2.0, 10.0),
+            "bpm_tolerance_percent": (2.0, 20.0),
             "energy_window_size": (2, 5),
             "min_track_duration_seconds": (60, 300),
             "max_track_duration_seconds": (300, 3600),
