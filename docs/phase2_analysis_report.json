@@ -1,0 +1,148 @@
+{
+  "analysis_timestamp": "2026-02-07T01:25:00Z",
+  "phase": 2,
+  "phase_name": "Harmonic Mixing",
+  "track_count": 4,
+  "tracks": [
+    {
+      "index": 0,
+      "name": "NICE KEED - WE ARE YOUR FRIENDS",
+      "camelot_key": "10B",
+      "confidence": 1.0,
+      "bpm": 128,
+      "key_note": "D Minor"
+    },
+    {
+      "index": 1,
+      "name": "LOOCEE Ø - COLD HEART",
+      "camelot_key": "9B",
+      "confidence": 1.0,
+      "bpm": 126,
+      "key_note": "G Minor"
+    },
+    {
+      "index": 2,
+      "name": "DΛVЯ - In Favor Of Noise",
+      "camelot_key": "11B",
+      "confidence": 1.0,
+      "bpm": 130,
+      "key_note": "A Minor"
+    },
+    {
+      "index": 3,
+      "name": "Niki Istrefi - Red Armor",
+      "camelot_key": "12B",
+      "confidence": 1.0,
+      "bpm": 125,
+      "key_note": "E Minor"
+    }
+  ],
+  "compatibility_matrix": [
+    [5.0, 4.0, 3.0, 3.0],
+    [4.0, 5.0, 4.0, 3.0],
+    [3.0, 4.0, 5.0, 4.0],
+    [3.0, 3.0, 4.0, 5.0]
+  ],
+  "compatibility_matrix_legend": {
+    "5.0": "PERFECT - Same key",
+    "4.0": "EXCELLENT - ±1 semitone",
+    "3.0": "GOOD - ±2 semitones",
+    "2.0": "ACCEPTABLE - ±3 semitones",
+    "0.0-1.0": "POOR - ±4+ semitones"
+  },
+  "optimal_sequence": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "average_compatibility": 3.67,
+  "sequence_quality": "excellent",
+  "transitions": [
+    {
+      "from_index": 0,
+      "from_key": "10B",
+      "to_index": 1,
+      "to_key": "9B",
+      "semitone_distance": 1,
+      "compatibility_level": "EXCELLENT",
+      "compatibility_score": 4.0,
+      "technique": "smooth_crossfade",
+      "duration_seconds": 4,
+      "eq_adjustment": "minimal",
+      "notes": "Adjacent keys on Camelot wheel - perfect for smooth beatmatched transition"
+    },
+    {
+      "from_index": 1,
+      "from_key": "9B",
+      "to_index": 2,
+      "to_key": "11B",
+      "semitone_distance": 2,
+      "compatibility_level": "GOOD",
+      "compatibility_score": 3.0,
+      "technique": "careful_crossfade",
+      "duration_seconds": 6,
+      "eq_adjustment": "medium",
+      "notes": "2-semitone separation - use careful EQ assistance during blend"
+    },
+    {
+      "from_index": 2,
+      "from_key": "11B",
+      "to_index": 3,
+      "to_key": "12B",
+      "semitone_distance": 1,
+      "compatibility_level": "EXCELLENT",
+      "compatibility_score": 4.0,
+      "technique": "smooth_crossfade",
+      "duration_seconds": 4,
+      "eq_adjustment": "minimal",
+      "notes": "Adjacent keys - excellent transition, direct mix recommended"
+    }
+  ],
+  "mixing_advice": {
+    "overall_strategy": "This is an excellent 4-track mix. Keys flow naturally around the Camelot wheel with strong compatibility.",
+    "opening": "Start with Track 0 (D Minor/10B) - solid foundation",
+    "buildups": "Transitions 0→1→2→3 create natural energy progression with minimal harmonic jarring",
+    "energy_arc": "Relatively flat energy (all upbeat electronic tracks) - consider adding ambient/downtempo track for dynamic contrast",
+    "closing": "End with Track 3 (E Minor/12B) or loop back to 0 for cyclic DJ set"
+  },
+  "statistics": {
+    "total_transitions": 3,
+    "perfect_transitions": 0,
+    "excellent_transitions": 2,
+    "good_transitions": 1,
+    "acceptable_transitions": 0,
+    "poor_transitions": 0,
+    "average_transition_quality": 3.67,
+    "total_blend_time_seconds": 14,
+    "mix_duration_without_tracks_minutes": "~3-4 minutes overhead"
+  },
+  "recommendations": [
+    {
+      "priority": "HIGH",
+      "category": "Set Structure",
+      "recommendation": "Keys (10B, 9B, 11B, 12B) form a tight cluster on the wheel - excellent for flow but consider adding variety",
+      "action": "Add track in key like 5B (C Minor) or 1A (G Major) for contrast while maintaining compatibility"
+    },
+    {
+      "priority": "MEDIUM",
+      "category": "Energy Management",
+      "recommendation": "All tracks have similar energy levels (~128 BPM, electronic) - consider energy arc",
+      "action": "Introduce buildup/breakdown tracks to create dynamic tension and release"
+    },
+    {
+      "priority": "LOW",
+      "category": "Performance",
+      "recommendation": "Transition times (4-6 sec) are professional-grade",
+      "action": "Stick with recommended durations for smooth listening experience"
+    }
+  ],
+  "camelot_wheel_position": {
+    "track_0_key_10B": "D Minor - wheel position 10 (minor/B mode)",
+    "track_1_key_9B": "G Minor - wheel position 9 (minor/B mode)",
+    "track_2_key_11B": "A Minor - wheel position 11 (minor/B mode)",
+    "track_3_key_12B": "E Minor - wheel position 12 (minor/B mode)",
+    "visualization": "All tracks in minor (B) mode, positions 9-12 (compact cluster on northeast quadrant)"
+  },
+  "next_phase": "Phase 3 will add spectral analysis to detect energy peaks, smart cue points, and intro/outro sections"
+}

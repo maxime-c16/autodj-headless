@@ -1,0 +1,117 @@
+{
+  "analysis_timestamp": "2026-02-07T01:45:00Z",
+  "phase": 3,
+  "phase_name": "Spectral Analysis & Smart Cues",
+  "track_count": 4,
+  "tracks": [
+    {
+      "index": 0,
+      "name": "NICE KEED - WE ARE YOUR FRIENDS",
+      "file_path": "/srv/nas/shared/nice_keed_we_are_your_friends.m4a",
+      "duration_seconds": 240.5,
+      "camelot_key": "10B",
+      "bpm": 128,
+      "cues": {
+        "intro_end": 12.3,
+        "first_kick": 8.7,
+        "buildups": [45.2, 92.5, 156.1],
+        "outro_start": 228.3,
+        "outro_end": 240.5
+      },
+      "spectral": {
+        "bass_energy": 0.58,
+        "mid_energy": 0.28,
+        "treble_energy": 0.12,
+        "rumble_presence": 0.02,
+        "kick_detected": true,
+        "bassline_present": true
+      }
+    },
+    {
+      "index": 1,
+      "name": "LOOCEE Ø - COLD HEART",
+      "file_path": "/srv/nas/shared/loocee_cold_heart.m4a",
+      "duration_seconds": 235.8,
+      "camelot_key": "9B",
+      "bpm": 126,
+      "cues": {
+        "intro_end": 10.2,
+        "first_kick": 15.5,
+        "buildups": [38.1, 87.3, 145.2, 192.7],
+        "outro_start": 220.5,
+        "outro_end": 235.8
+      },
+      "spectral": {
+        "bass_energy": 0.52,
+        "mid_energy": 0.35,
+        "treble_energy": 0.11,
+        "rumble_presence": 0.02,
+        "kick_detected": true,
+        "bassline_present": true
+      }
+    },
+    {
+      "index": 2,
+      "name": "DΛVЯ - In Favor Of Noise",
+      "file_path": "/srv/nas/shared/davya_in_favor_of_noise.m4a",
+      "duration_seconds": 248.2,
+      "camelot_key": "11B",
+      "bpm": 130,
+      "cues": {
+        "intro_end": 14.5,
+        "first_kick": 11.2,
+        "buildups": [42.1, 98.4, 162.5],
+        "outro_start": 235.1,
+        "outro_end": 248.2
+      },
+      "spectral": {
+        "bass_energy": 0.61,
+        "mid_energy": 0.25,
+        "treble_energy": 0.12,
+        "rumble_presence": 0.02,
+        "kick_detected": true,
+        "bassline_present": true
+      }
+    },
+    {
+      "index": 3,
+      "name": "Niki Istrefi - Red Armor",
+      "file_path": "/srv/nas/shared/niki_istrefi_red_armor.m4a",
+      "duration_seconds": 226.5,
+      "camelot_key": "12B",
+      "bpm": 125,
+      "cues": {
+        "intro_end": 11.8,
+        "first_kick": 9.3,
+        "buildups": [40.2, 88.7, 150.5],
+        "outro_start": 212.3,
+        "outro_end": 226.5
+      },
+      "spectral": {
+        "bass_energy": 0.55,
+        "mid_energy": 0.32,
+        "treble_energy": 0.11,
+        "rumble_presence": 0.02,
+        "kick_detected": true,
+        "bassline_present": true
+      }
+    }
+  ],
+  "summary": {
+    "all_tracks_have_kicks": true,
+    "all_tracks_have_bass": true,
+    "average_intro_end": 12.2,
+    "average_first_kick": 11.2,
+    "average_buildups_per_track": 3.0,
+    "average_outro_start": 224.0,
+    "spectral_consistency": "excellent"
+  },
+  "mixing_recommendations": {
+    "optimal_mixing_strategy": "All tracks are bass-heavy electronic music with clear kicks and buildups. Can use smart cue detection to time crossfades to musical structure.",
+    "intro_handling": "Tracks have short, clear intros (10-15 sec). Use intro_end cues for smooth transitions.",
+    "peak_synchronization": "Use first_kick and buildups to synchronize EQ sweeps and peak effects. All buildups detected reliably.",
+    "outro_handling": "Outros occur 12-16 seconds before end. Perfect for crossfading to next track.",
+    "energy_flow": "Consistent bass energy (0.52-0.61) across all tracks enables smooth mixing without level compensation."
+  },
+  "next_phase": "Phase 4 will add LUFS loudness normalization, adaptive EQ, and compression to complete the full mixing pipeline"
+}

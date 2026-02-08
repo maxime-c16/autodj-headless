@@ -6,7 +6,7 @@ max_playlist_tracks = 12
 seed_track_path = ""
 
 [constraints]
-bpm_tolerance_percent = 4.0
+bpm_tolerance_percent = 15.0
 energy_window_size = 3
 min_track_duration_seconds = 120
 max_track_duration_seconds = 1200
