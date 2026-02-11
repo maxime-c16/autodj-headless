@@ -36,6 +36,14 @@ class TransitionType(Enum):
     EQ_BLEND = "eq_blend"
 
 
+class BPMRampStrategy(Enum):
+    """Available BPM ramping strategies for incoming track."""
+    NO_RAMP = "no_ramp"              # Stay at matched BPM (seamless mix)
+    RAMP_LINEAR = "ramp_linear"      # Smooth linear transition from target to native over overlap
+    RAMP_FAST = "ramp_fast"          # Aggressive transition in first bar, then settle
+    RAMP_DELAYED = "ramp_delayed"    # Stay matched during overlap, transition after
+
+
 @dataclass
 class TransitionSpec:
     """Specification for a single transition between two tracks."""
@@ -86,6 +94,7 @@ class TransitionPlan:
         roll_stages: Optional[str] = None,
         hpf_frequency: float = 200.0,
         lpf_frequency: float = 2500.0,
+        bpm_ramp_strategy: str = "no_ramp",
     ):
         """
         Args:
@@ -117,6 +126,7 @@ class TransitionPlan:
             roll_stages: JSON array of (bars, reps) tuples
             hpf_frequency: Bass kill cutoff Hz
             lpf_frequency: Incoming warmth cutoff Hz
+            bpm_ramp_strategy: BPM ramping strategy for incoming track
         """
         self.track_index = track_index
         self.track_id = track_id
@@ -147,6 +157,7 @@ class TransitionPlan:
         self.roll_stages = roll_stages
         self.hpf_frequency = hpf_frequency
         self.lpf_frequency = lpf_frequency
+        self.bpm_ramp_strategy = bpm_ramp_strategy
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -189,6 +200,8 @@ class TransitionPlan:
             d["loop_repeats"] = self.loop_repeats
         if self.roll_stages is not None:
             d["roll_stages"] = self.roll_stages
+        if self.bpm_ramp_strategy != "no_ramp":
+            d["bpm_ramp_strategy"] = self.bpm_ramp_strategy
         return d
 
 
@@ -348,6 +361,21 @@ class ArchwizardPhonemius:
 
             prev_transition_type = transition_spec.type
 
+            # Choose BPM ramping strategy for incoming track
+            bpm_ramp_strategy = BPMRampStrategy.NO_RAMP.value  # Default
+            if next_track_id:
+                next_track = library_dict.get(next_track_id, {})
+                next_bpm = next_track.get("bpm") or 128.0
+                bpm_ramp_strategy = self._choose_bpm_ramp_strategy(
+                    transition_type=transition_spec.type,
+                    outgoing_track=track,
+                    incoming_track=next_track,
+                    target_bpm=target_bpm,
+                    native_bpm=next_bpm,
+                    outgoing_analysis=track_analysis,
+                    incoming_analysis=next_analysis,
+                ).value
+
             plan = TransitionPlan(
                 track_index=idx,
                 track_id=track_id,
@@ -377,6 +405,7 @@ class ArchwizardPhonemius:
                 roll_stages=json.dumps(transition_spec.roll_stages) if transition_spec.roll_stages else None,
                 hpf_frequency=transition_spec.hpf_frequency,
                 lpf_frequency=transition_spec.lpf_frequency,
+                bpm_ramp_strategy=bpm_ramp_strategy,
             )
             transitions.append(plan)
 
@@ -654,6 +683,85 @@ class ArchwizardPhonemius:
 
         logger.info(f"✅ Playlist built: {len(track_ids)} tracks, {len(transitions)} transitions")
         return (track_ids, transitions)
+
+    def _choose_bpm_ramp_strategy(
+        self,
+        transition_type: TransitionType,
+        outgoing_track: Dict[str, Any],
+        incoming_track: Dict[str, Any],
+        target_bpm: float,
+        native_bpm: float,
+        outgoing_analysis: Optional[Dict],
+        incoming_analysis: Optional[Dict],
+    ) -> BPMRampStrategy:
+        """
+        Choose BPM ramping strategy for incoming track based on transition context.
+
+        Greedy scoring — strategies evaluated by:
+        - BPM distance between tracks
+        - Energy progression (rising/falling/stable)
+        - Transition type constraints
+        - Section structure
+
+        Args:
+            transition_type: Chosen transition type
+            outgoing_track: Outgoing track metadata
+            incoming_track: Incoming track metadata
+            target_bpm: Target BPM for rendering (midpoint of outgoing+incoming)
+            native_bpm: Incoming track's native BPM
+            outgoing_analysis: Outgoing track structure analysis
+            incoming_analysis: Incoming track structure analysis
+
+        Returns:
+            BPMRampStrategy enum value
+        """
+        # Calculate BPM distance
+        bpm_distance = abs(target_bpm - native_bpm)
+        bpm_percent_diff = (bpm_distance / native_bpm * 100.0) if native_bpm > 0 else 0.0
+
+        # Check energy progression
+        out_energy = outgoing_track.get("energy", 0.5)
+        in_energy = incoming_track.get("energy", 0.5)
+        energy_rising = in_energy > out_energy + 0.1
+        energy_falling = out_energy > in_energy + 0.1
+        energy_stable = abs(out_energy - in_energy) <= 0.1
+
+        # Score each strategy
+        scores = {}
+
+        # NO_RAMP: Best for seamless mixing (same BPM, stable energy, compatible keys)
+        if bpm_percent_diff < 2.0 and energy_stable:
+            scores[BPMRampStrategy.NO_RAMP] = 4.0  # Nearly perfect match
+        elif bpm_percent_diff < 5.0 and energy_stable:
+            scores[BPMRampStrategy.NO_RAMP] = 3.0
+        else:
+            scores[BPMRampStrategy.NO_RAMP] = 1.0  # Fallback default
+
+        # RAMP_LINEAR: Smooth glide from target to native (good for large BPM differences)
+        if 5.0 <= bpm_percent_diff <= 20.0:
+            if energy_stable or energy_falling:
+                scores[BPMRampStrategy.RAMP_LINEAR] = 3.5  # Smooth transition down
+            else:
+                scores[BPMRampStrategy.RAMP_LINEAR] = 2.5  # Possible but less ideal
+        elif bpm_percent_diff > 20.0:
+            scores[BPMRampStrategy.RAMP_LINEAR] = 4.0  # Large distance = smooth ramp preferred
+
+        # RAMP_FAST: Aggressive transition (good for energy rises)
+        if energy_rising and bpm_percent_diff > 3.0:
+            scores[BPMRampStrategy.RAMP_FAST] = 4.0  # Rising energy + BPM change
+        elif energy_rising:
+            scores[BPMRampStrategy.RAMP_FAST] = 3.0
+
+        # RAMP_DELAYED: Stay matched during overlap, then transition (good for drop_swap)
+        if transition_type == TransitionType.DROP_SWAP:
+            scores[BPMRampStrategy.RAMP_DELAYED] = 3.5  # Drop swaps benefit from matched BPM
+        elif transition_type in (TransitionType.LOOP_HOLD, TransitionType.LOOP_ROLL):
+            scores[BPMRampStrategy.RAMP_DELAYED] = 2.5  # Loops prefer smooth glide
+
+        # Pick highest-scoring strategy
+        best_strategy = max(scores, key=scores.get, default=BPMRampStrategy.NO_RAMP)
+        logger.debug(f"BPM ramp scores: {scores}, chosen: {best_strategy.value}")
+        return best_strategy
 
 
 def _are_keys_compatible(key_a: str, key_b: str) -> bool:

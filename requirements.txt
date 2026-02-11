@@ -1,0 +1,23 @@
+# AutoDJ-Headless Python Dependencies
+
+# Core scientific stack (for audio analysis)
+numpy>=1.24,<1.25
+scipy>=1.10,<1.11
+
+# Audio analysis
+aubio>=0.4.9
+essentia>=2.1b5
+mutagen>=1.46
+audioread>=3.1
+librosa>=0.10
+soundfile>=0.12
+
+# Configuration
+toml>=0.10
+
+# Utilities
+python-dateutil>=2.8
+pytz>=2023.3
+
+# Discord integration
+discord.py>=2.3.2

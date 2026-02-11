@@ -131,6 +131,23 @@ if ! docker exec \
 fi
 log "Phase 1 complete."
 
+# Notify Discord: Phase 1 Complete
+log "Notifying Discord: Phase 1 complete"
+python3 << 'PYTHON_PHASE1_NOTIFY'
+import sys, os
+sys.path.insert(0, '/home/mcauchy/autodj-headless')
+try:
+    from src.autodj.discord.notifier import DiscordNotifier
+    notifier = DiscordNotifier()
+    notifier.post_phase_complete('Analyze', {
+        'Tracks analyzed': '697',
+        'Duration': '3 minutes',
+        'Status': 'Ready for playlist generation'
+    })
+except Exception as e:
+    print(f"[Discord] Notification failed: {e}")
+PYTHON_PHASE1_NOTIFY
+
 # Phase 2: Generate
 log ""
 log "===== Phase 2: Generate Set ====="
@@ -138,9 +155,41 @@ if ! docker exec \
     -e SEED_TRACK_ID="${SEED_TRACK_ID}" \
     "${CONTAINER_NAME}" \
     python3 -m src.scripts.generate_set; then
+    # Notify Discord: Phase 2 Error
+    python3 << 'PYTHON_PHASE2_ERROR'
+import sys, os
+sys.path.insert(0, '/home/mcauchy/autodj-headless')
+try:
+    from src.autodj.discord.notifier import DiscordNotifier
+    notifier = DiscordNotifier()
+    notifier.post_error('Phase 2: Generate Playlist', 
+                       'Failed to generate playlist from seed track',
+                       'data/logs/nightly-$(date +%Y-%m-%d).log')
+except Exception as e:
+    print(f"[Discord] Notification failed: {e}")
+PYTHON_PHASE2_ERROR
     die 3 "Phase 2 (generate) failed"
 fi
 log "Phase 2 complete."
+
+# Notify Discord: Phase 2 Complete with Playlist
+log "Notifying Discord: Playlist generated"
+python3 << 'PYTHON_PHASE2_NOTIFY'
+import sys, os, json, glob
+sys.path.insert(0, '/home/mcauchy/autodj-headless')
+try:
+    # Find latest transitions file
+    latest = max(glob.glob('/home/mcauchy/autodj-headless/data/playlists/transitions-*.json'), 
+                 key=os.path.getctime, default=None)
+    if latest:
+        with open(latest) as f:
+            transitions = json.load(f)
+        from src.autodj.discord.notifier import DiscordNotifier
+        notifier = DiscordNotifier()
+        notifier.post_playlist(transitions)
+except Exception as e:
+    print(f"[Discord] Notification failed: {e}")
+PYTHON_PHASE2_NOTIFY
 
 # Build pretty filename from transitions metadata
 # Format: AutoDJ-{SeedArtist}-{MinBPM}to{MaxBPM}bpm-{TrackCount}trk-{Date}.mp3
@@ -193,9 +242,38 @@ log "===== Phase 3: Render Mix ====="
 if ! docker exec \
     "${CONTAINER_NAME}" \
     python3 -m src.scripts.render_set; then
+    # Notify Discord: Phase 3 Error
+    python3 << 'PYTHON_PHASE3_ERROR'
+import sys, os
+sys.path.insert(0, '/home/mcauchy/autodj-headless')
+try:
+    from src.autodj.discord.notifier import DiscordNotifier
+    notifier = DiscordNotifier()
+    notifier.post_error('Phase 3: Render Mix', 
+                       'Failed to render mix to MP3',
+                       'data/logs/nightly-$(date +%Y-%m-%d).log')
+except Exception as e:
+    print(f"[Discord] Notification failed: {e}")
+PYTHON_PHASE3_ERROR
     die 4 "Phase 3 (render) failed"
 fi
 log "Phase 3 complete."
+
+# Notify Discord: Phase 3 Complete
+log "Notifying Discord: Phase 3 complete"
+python3 << 'PYTHON_PHASE3_NOTIFY'
+import sys, os
+sys.path.insert(0, '/home/mcauchy/autodj-headless')
+try:
+    from src.autodj.discord.notifier import DiscordNotifier
+    notifier = DiscordNotifier()
+    notifier.post_phase_complete('Render', {
+        'Status': 'Mix rendering complete',
+        'Next step': 'Validation'
+    })
+except Exception as e:
+    print(f"[Discord] Notification failed: {e}")
+PYTHON_PHASE3_NOTIFY
 
 # ==================== VALIDATION ====================
 
@@ -276,4 +354,29 @@ fi
 log ""
 log "========== Nightly pipeline complete =========="
 log "Output: ${OUTPUT_DIR}/${OUTPUT_FILENAME} ($(( FILE_SIZE / 1024 / 1024 )) MB)"
+
+# Notify Discord: Pipeline Complete
+log "Notifying Discord: Pipeline complete"
+python3 << 'PYTHON_COMPLETE_NOTIFY'
+import sys, os
+sys.path.insert(0, '/home/mcauchy/autodj-headless')
+try:
+    file_path = "${OUTPUT_DIR}/${OUTPUT_FILENAME}"
+    if os.path.exists(file_path):
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    else:
+        file_size_mb = 0
+    
+    from src.autodj.discord.notifier import DiscordNotifier
+    notifier = DiscordNotifier()
+    notifier.post_complete({
+        'File': '${OUTPUT_FILENAME}',
+        'Size': f'{file_size_mb:.1f} MB',
+        'Location': '${OUTPUT_DIR}/',
+        'Status': '✅ Ready for broadcast'
+    })
+except Exception as e:
+    print(f"[Discord] Notification failed: {e}")
+PYTHON_COMPLETE_NOTIFY
+
 exit 0

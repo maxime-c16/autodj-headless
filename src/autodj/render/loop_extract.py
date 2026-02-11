@@ -144,15 +144,18 @@ def create_loop_roll(
     output_path: str,
 ) -> bool:
     """
-    Create progressive halving roll from loop region.
+    Create progressive halving roll from loop region (RIGHT-halving).
 
-    Generates a roll where each stage has a shorter loop segment
-    repeated more times, creating a "tightening" effect:
-    e.g., [(8, 1), (4, 1), (2, 1), (1, 2)] means:
-      - 8-bar segment played 1x
-      - 4-bar segment played 1x
-      - 2-bar segment played 1x
-      - 1-bar segment played 2x
+    Generates a roll where each stage takes the RIGHT HALF of the remaining loop,
+    creating a "tightening" effect (loop getting shorter and tighter):
+    e.g., for an 8-bar loop with stages [(8, 1), (4, 1), (2, 1), (1, 2)]:
+      - Stage 1 (8 bars): bars 0-8 (full loop) played 1x
+      - Stage 2 (4 bars): bars 4-8 (RIGHT HALF) played 1x
+      - Stage 3 (2 bars): bars 6-8 (RIGHT HALF of 4-8) played 1x
+      - Stage 4 (1 bar):  bars 7-8 (RIGHT HALF of 6-8) played 2x
+
+    This creates the classic DJ "loop roll" effect where the loop
+    progressively tightens toward the end.
 
     Args:
         file_path: Source audio file path
@@ -173,23 +176,35 @@ def create_loop_roll(
     stage_files = []
 
     try:
+        # Calculate total loop duration from stages (use the largest/first stage)
+        total_duration = stages[0][0] * bar_duration if stages else 0
+
         # Generate each stage as a separate WAV
+        # Each stage takes the RIGHT HALF of the remaining loop
+        remaining_duration = total_duration
         for stage_idx, (bars, reps) in enumerate(stages):
             stage_duration = bars * bar_duration
             stage_path = str(temp_dir / f"roll_stage_{stage_idx}.wav")
             stage_files.append(stage_path)
 
+            # Calculate start position: take the RIGHT half by starting at
+            # loop_start + (remaining_duration - stage_duration)
+            stage_start = loop_start + (remaining_duration - stage_duration)
+
             if reps == 1:
-                # Simple extraction
-                if not extract_segment(file_path, loop_start, stage_duration, stage_path):
+                # Simple extraction from right half
+                if not extract_segment(file_path, stage_start, stage_duration, stage_path):
                     return False
             else:
-                # Extract + repeat
+                # Extract + repeat from right half
                 if not create_loop_hold(
-                    file_path, loop_start, loop_start + stage_duration,
+                    file_path, stage_start, stage_start + stage_duration,
                     reps, stage_path,
                 ):
                     return False
+
+            # Update remaining duration for next iteration
+            remaining_duration = stage_duration
 
         # Concatenate all stages using ffmpeg concat demuxer
         concat_file = str(temp_dir / "roll_concat.txt")

@@ -755,6 +755,133 @@ def _preprocess_loops(plan: dict, config: dict) -> Optional[str]:
     return temp_dir
 
 
+def _generate_bpm_ramped_incoming(
+    in_var: str,
+    next_file: str,
+    next_bpm: float,
+    next_target: float,
+    overlap_sec: float,
+    in_cue_out: float,
+    lpf_freq: float,
+    ramp_strategy: str,
+    script: list,
+    in_cue_in: float = 0.0,
+) -> str:
+    """
+    Generate Liquidsoap code for BPM-ramped incoming track.
+
+    Handles 4 strategies by creating time-segmented sources with different stretch ratios.
+
+    Args:
+        in_var: Variable name for incoming track (e.g., "t01_in")
+        next_file: Path to incoming audio file
+        next_bpm: Native BPM of incoming track
+        next_target: Target BPM for incoming track
+        overlap_sec: Overlap duration in seconds
+        in_cue_out: Cue-out time in seconds
+        lpf_freq: LPF cutoff frequency for filtering
+        ramp_strategy: "no_ramp", "ramp_linear", "ramp_fast", or "ramp_delayed"
+        script: List of script lines to append to
+        in_cue_in: Cue-in time in seconds (default 0.0, can be overridden for drop_swap)
+
+    Returns:
+        Variable name of the final incoming track (may be different if ramping applied)
+    """
+    if not next_bpm or next_bpm <= 0:
+        next_bpm = 128.0
+
+    next_stretch = _calculate_stretch_ratio(next_bpm, next_target)
+    bar_sec = 4 * 60.0 / next_target if next_target > 0 else 1.0
+
+    if ramp_strategy == "no_ramp":
+        # Standard: single stretch ratio for entire duration
+        script.append(f'# Incoming: no BPM ramp (stay at matched target BPM)')
+        script.append(f'{in_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+        script.append(f"{in_var} = cue_cut({in_var})")
+        if next_stretch != 1.0:
+            script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
+        script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
+        script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+        return in_var
+
+    elif ramp_strategy == "ramp_linear":
+        # Linear glide from target to native BPM over overlap
+        # Split into 2 segments: first half at target, second half at native
+        script.append(f'# Incoming: linear BPM ramp (target {next_target:.1f} → native {next_bpm:.1f} over {overlap_sec:.1f}s)')
+
+        half_sec = overlap_sec / 2.0
+        native_stretch = 1.0  # Native BPM = stretch ratio 1.0
+
+        # First half: target BPM
+        in_1_var = f"{in_var}_seg1"
+        mid_cue = in_cue_in + half_sec
+        script.append(f'{in_1_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={mid_cue:.3f}:{next_file}"))')
+        script.append(f"{in_1_var} = cue_cut({in_1_var})")
+        if next_stretch != 1.0:
+            script.append(f"{in_1_var} = stretch(ratio={next_stretch:.3f}, {in_1_var})")
+        script.append(f"{in_1_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_1_var})")
+        script.append(f"{in_1_var} = fade.in(type=\"sin\", duration={half_sec:.1f}, {in_1_var})")
+
+        # Second half: native BPM (smooth glide back)
+        in_2_var = f"{in_var}_seg2"
+        script.append(f'{in_2_var} = once(single("annotate:liq_cue_in={mid_cue:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+        script.append(f"{in_2_var} = cue_cut({in_2_var})")
+        if native_stretch != 1.0:
+            script.append(f"{in_2_var} = stretch(ratio={native_stretch:.3f}, {in_2_var})")
+        script.append(f"{in_2_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_2_var})")
+        script.append(f"{in_2_var} = fade.in(type=\"sin\", duration={half_sec:.1f}, {in_2_var})")
+
+        # Layer segments
+        script.append(f"{in_var} = add(normalize=false, [{in_1_var}, {in_2_var}])")
+        return in_var
+
+    elif ramp_strategy == "ramp_fast":
+        # Aggressive transition in first bar, then settle to native
+        script.append(f'# Incoming: fast BPM ramp (first bar aggressive, then settle to native {next_bpm:.1f})')
+
+        fast_sec = min(bar_sec, overlap_sec / 4.0)  # First bar or 1/4 of overlap
+        settle_sec = overlap_sec - fast_sec
+
+        # First segment: target BPM (aggressive)
+        in_1_var = f"{in_var}_fast"
+        fast_cue_out = in_cue_in + fast_sec
+        script.append(f'{in_1_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={fast_cue_out:.3f}:{next_file}"))')
+        script.append(f"{in_1_var} = cue_cut({in_1_var})")
+        if next_stretch != 1.0:
+            script.append(f"{in_1_var} = stretch(ratio={next_stretch:.3f}, {in_1_var})")
+        script.append(f"{in_1_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_1_var})")
+        script.append(f"{in_1_var} = fade.in(type=\"sin\", duration={fast_sec:.1f}, {in_1_var})")
+
+        # Second segment: settle at native BPM
+        in_2_var = f"{in_var}_settle"
+        script.append(f'{in_2_var} = once(single("annotate:liq_cue_in={fast_cue_out:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+        script.append(f"{in_2_var} = cue_cut({in_2_var})")
+        script.append(f"{in_2_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_2_var})")
+        script.append(f"{in_2_var} = fade.in(type=\"sin\", duration={settle_sec:.1f}, {in_2_var})")
+
+        # Layer segments
+        script.append(f"{in_var} = add(normalize=false, [{in_1_var}, {in_2_var}])")
+        return in_var
+
+    elif ramp_strategy == "ramp_delayed":
+        # Stay at target BPM during overlap, then transition after
+        # For now, implement as: matched during overlap, then fade back hint
+        script.append(f'# Incoming: delayed BPM ramp (stay matched during overlap, hint native after)')
+        script.append(f'{in_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+        script.append(f"{in_var} = cue_cut({in_var})")
+        if next_stretch != 1.0:
+            script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
+        script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
+        script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+        return in_var
+
+    else:
+        # Unknown strategy, fallback to no_ramp
+        return _generate_bpm_ramped_incoming(
+            in_var, next_file, next_bpm, next_target, overlap_sec, in_cue_out, lpf_freq, "no_ramp", script
+        )
+
+
 def _generate_liquidsoap_script_v2(
     plan: dict, output_path: str, config: dict, temp_loop_dir: Optional[str] = None,
 ) -> str:
@@ -894,15 +1021,13 @@ def _generate_liquidsoap_script_v2(
                 script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
                 script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
 
-                # Incoming: first N bars filtered
+                # Incoming: with BPM ramping strategy
                 in_cue_out = overlap_sec
-                script.append(f'# Incoming: first {overlap_bars} bars filtered')
-                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-                script.append(f"{in_var} = cue_cut({in_var})")
-                if next_stretch != 1.0:
-                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
-                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
-                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+                bpm_ramp_strat = trans.get("bpm_ramp_strategy", "no_ramp")
+                _generate_bpm_ramped_incoming(
+                    in_var, next_file, next_bpm, next_target, overlap_sec, in_cue_out,
+                    lpf_freq, bpm_ramp_strat, script
+                )
 
             elif transition_type == "loop_roll" and trans.get("_loop_wav_path"):
                 # Outgoing: pre-extracted roll WAV
@@ -914,15 +1039,13 @@ def _generate_liquidsoap_script_v2(
                 script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
                 script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
 
-                # Incoming: last half of overlap filtered
+                # Incoming: with BPM ramping (last half of overlap for loop_roll)
                 in_overlap_sec = overlap_sec / 2.0  # Fade in over last 8 bars of 16
-                script.append(f'# Incoming: last {overlap_bars // 2} bars of roll with filter')
-                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_overlap_sec:.3f}:{next_file}"))')
-                script.append(f"{in_var} = cue_cut({in_var})")
-                if next_stretch != 1.0:
-                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
-                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
-                script.append(f"{in_var} = fade.in(type=\"sin\", duration={in_overlap_sec:.1f}, {in_var})")
+                bpm_ramp_strat = trans.get("bpm_ramp_strategy", "no_ramp")
+                _generate_bpm_ramped_incoming(
+                    in_var, next_file, next_bpm, next_target, in_overlap_sec, in_overlap_sec,
+                    lpf_freq, bpm_ramp_strat, script
+                )
 
             elif transition_type == "drop_swap":
                 # Short punchy transition: fast fade, no LPF on incoming
@@ -936,38 +1059,75 @@ def _generate_liquidsoap_script_v2(
                     script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
                 script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
 
-                # Incoming at drop position: NO LPF for full-power entry
+                # Incoming at drop position: with BPM ramping, but NO LPF (full power)
                 drop_sec = next_drop_sec if next_drop_sec else 0.0
                 drop_end = drop_sec + overlap_sec
-                script.append(f'# Incoming: at drop, full power (no LPF)')
-                script.append(f'{in_var} = once(single("annotate:liq_cue_in={drop_sec:.3f},liq_cue_out={drop_end:.3f}:{next_file}"))')
-                script.append(f"{in_var} = cue_cut({in_var})")
-                if next_stretch != 1.0:
-                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
-                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+                bpm_ramp_strat = trans.get("bpm_ramp_strategy", "no_ramp")
+
+                # For drop_swap with BPM ramping, use no filter (lpf_freq = 20000 means off)
+                _generate_bpm_ramped_incoming(
+                    in_var, next_file, next_bpm, next_target, overlap_sec, drop_end,
+                    20000.0, bpm_ramp_strat, script, in_cue_in=drop_sec
+                )
 
             elif transition_type == "eq_blend":
-                # Long gradual blend (32 bars)
+                # Long gradual blend with frequency sweep over first 1 bar
+                # Calculate 1 bar duration (4 beats at target BPM)
+                bar_sec = (60.0 / target_bpm) * 4
+                bar_sec = min(bar_sec, overlap_sec / 4.0)  # Don't exceed 1/4 of overlap
+
                 out_start = body_cue_out
                 out_end = cue_out_sec
 
-                script.append(f'# Outgoing: slow EQ blend out ({overlap_bars} bars)')
-                script.append(f'{out_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
-                script.append(f"{out_var} = cue_cut({out_var})")
-                if stretch_ratio != 1.0:
-                    script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
-                script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
-                script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
+                script.append(f'# Outgoing: EQ sweep over first bar, then fade out')
 
-                # Incoming: long fade in with LPF
+                # Aggressive HPF for first 1 bar (strong bass cut)
+                out_bar1_var = f"{out_var}_bar1"
+                script.append(f'{out_bar1_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_start + bar_sec:.3f}:{file_path}"))')
+                script.append(f"{out_bar1_var} = cue_cut({out_bar1_var})")
+                if stretch_ratio != 1.0:
+                    script.append(f"{out_bar1_var} = stretch(ratio={stretch_ratio:.3f}, {out_bar1_var})")
+                script.append(f"{out_bar1_var} = filter.iir.butterworth.high(frequency=200.0, order=2, {out_bar1_var})")
+                script.append(f"{out_bar1_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_bar1_var})")
+
+                # Subtle HPF for remaining bars (settle into steady state)
+                if overlap_sec > bar_sec * 1.5:
+                    out_remaining_var = f"{out_var}_remain"
+                    script.append(f'{out_remaining_var} = once(single("annotate:liq_cue_in={out_start + bar_sec:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
+                    script.append(f"{out_remaining_var} = cue_cut({out_remaining_var})")
+                    if stretch_ratio != 1.0:
+                        script.append(f"{out_remaining_var} = stretch(ratio={stretch_ratio:.3f}, {out_remaining_var})")
+                    script.append(f"{out_remaining_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_remaining_var})")
+                    script.append(f"{out_remaining_var} = fade.out(type=\"sin\", duration={overlap_sec - bar_sec:.1f}, {out_remaining_var})")
+                    script.append(f"{out_var} = add(normalize=false, [{out_bar1_var}, {out_remaining_var}])")
+                else:
+                    script.append(f"{out_var} = {out_bar1_var}")
+
+                # Incoming: warm LPF for first bar, then open up gradually
                 in_cue_out = overlap_sec
-                script.append(f'# Incoming: slow EQ blend in ({overlap_bars} bars)')
-                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-                script.append(f"{in_var} = cue_cut({in_var})")
+                script.append(f'# Incoming: EQ sweep over first bar, then open up')
+
+                # Aggressive LPF for first 1 bar (keep it warm, not bright)
+                in_bar1_var = f"{in_var}_bar1"
+                script.append(f'{in_bar1_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={bar_sec:.3f}:{next_file}"))')
+                script.append(f"{in_bar1_var} = cue_cut({in_bar1_var})")
                 if next_stretch != 1.0:
-                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
-                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
-                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+                    script.append(f"{in_bar1_var} = stretch(ratio={next_stretch:.3f}, {in_bar1_var})")
+                script.append(f"{in_bar1_var} = filter.iir.butterworth.low(frequency=500.0, order=2, {in_bar1_var})")
+                script.append(f"{in_bar1_var} = fade.in(type=\"sin\", duration={bar_sec:.1f}, {in_bar1_var})")
+
+                # Open filter for remaining bars (gradually brighten)
+                if in_cue_out > bar_sec * 1.5:
+                    in_remaining_var = f"{in_var}_remain"
+                    script.append(f'{in_remaining_var} = once(single("annotate:liq_cue_in={bar_sec:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+                    script.append(f"{in_remaining_var} = cue_cut({in_remaining_var})")
+                    if next_stretch != 1.0:
+                        script.append(f"{in_remaining_var} = stretch(ratio={next_stretch:.3f}, {in_remaining_var})")
+                    script.append(f"{in_remaining_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_remaining_var})")
+                    script.append(f"{in_remaining_var} = fade.in(type=\"sin\", duration={in_cue_out - bar_sec:.1f}, {in_remaining_var})")
+                    script.append(f"{in_var} = add(normalize=false, [{in_bar1_var}, {in_remaining_var}])")
+                else:
+                    script.append(f"{in_var} = {in_bar1_var}")
 
             else:
                 # bass_swap (default)
@@ -982,15 +1142,13 @@ def _generate_liquidsoap_script_v2(
                 script.append(f"{out_var} = filter.iir.butterworth.high(frequency={hpf_freq:.1f}, order=2, {out_var})")
                 script.append(f"{out_var} = fade.out(type=\"sin\", duration={overlap_sec:.1f}, {out_var})")
 
-                # Incoming: LPF warmth + fade in
+                # Incoming: with BPM ramping strategy
                 in_cue_out = overlap_sec
-                script.append(f'# Incoming: LPF warmth + fade in')
-                script.append(f'{in_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-                script.append(f"{in_var} = cue_cut({in_var})")
-                if next_stretch != 1.0:
-                    script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
-                script.append(f"{in_var} = filter.iir.butterworth.low(frequency={lpf_freq:.1f}, order=2, {in_var})")
-                script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
+                bpm_ramp_strat = trans.get("bpm_ramp_strategy", "no_ramp")
+                _generate_bpm_ramped_incoming(
+                    in_var, next_file, next_bpm, next_target, overlap_sec, in_cue_out,
+                    lpf_freq, bpm_ramp_strat, script
+                )
 
             # Layer outgoing + incoming
             script.append(f"{trans_var} = add(normalize=false, [{out_var}, {in_var}])")

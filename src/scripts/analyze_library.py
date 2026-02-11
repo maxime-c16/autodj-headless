@@ -57,7 +57,10 @@ def _generate_track_id(file_path: str) -> str:
 
 def _get_audio_duration(file_path: str) -> float:
     """
-    Get audio file duration in seconds.
+    Get audio file duration in seconds using ffprobe (metadata only, no decode).
+
+    Uses ffprobe instead of aubio to avoid hangs on corrupted audio files.
+    This is fast (~100ms) and works even on files with bad frames.
 
     Args:
         file_path: Path to audio file.
@@ -66,13 +69,36 @@ def _get_audio_duration(file_path: str) -> float:
         Duration in seconds, or 0 if unable to determine.
     """
     try:
-        import aubio
+        import subprocess
 
-        source = aubio.source(file_path)
-        frames = source.duration
-        return frames / source.samplerate
+        # Use ffprobe to read duration metadata (fast, no audio decode)
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                file_path
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5  # 5 second timeout (even slow NAS reads finish in <1s)
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+        else:
+            logger.warning(f"ffprobe could not get duration for {Path(file_path).name}")
+            return 0.0
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffprobe timeout for {Path(file_path).name} (likely bad file)")
+        return 0.0
+    except (ValueError, OSError) as e:
+        logger.warning(f"Could not get duration for {Path(file_path).name}: {e}")
+        return 0.0
     except Exception as e:
-        logger.warning(f"Could not get duration for {file_path}: {e}")
+        logger.warning(f"Unexpected error getting duration for {Path(file_path).name}: {e}")
         return 0.0
 
 
@@ -250,7 +276,7 @@ def discover_audio_files(library_path: str = "data/music") -> list:
 
 
 def analyze_track(
-    file_path: str, db: Database, config: Config
+    file_path: str, db: Database, config: Config, pipeline=None
 ) -> tuple:
     """
     Analyze a single track: BPM, key, cues.
@@ -259,6 +285,7 @@ def analyze_track(
         file_path: Path to audio file.
         db: Database instance.
         config: Config instance.
+        pipeline: Optional shared DJAnalysisPipeline instance (for memory reuse).
 
     Returns:
         Tuple (success: bool, metadata: TrackMetadata or None)
@@ -372,11 +399,9 @@ def analyze_track(
         # Phase 3/4: Spectral/loudness analysis (optional enhancement)
         if analysis_dict:
             try:
-                from autodj.analyze.pipeline import DJAnalysisPipeline
-                from autodj.analyze.dsp_config import DSPConfig
-
                 logger.debug("  → Analyzing spectral/loudness (Phase 3/4)...")
-                pipeline = DJAnalysisPipeline(config=DSPConfig())
+
+                # Reuse pipeline instance to avoid memory overhead (passed from main())
                 track_analysis = pipeline.analyze_track(
                     str(file_path), bpm=bpm, camelot_key=key,
                 )
@@ -393,7 +418,10 @@ def analyze_track(
                     analysis_dict["loudness"] = track_analysis.loudness.to_dict()
 
                 logger.debug(f"  ✓ Spectral/loudness analysis complete")
+
+                # CRITICAL: Clear audio cache after each track to prevent memory buildup
                 pipeline.audio_cache.clear()
+
             except Exception as e:
                 logger.debug(f"  Phase 3/4 pipeline skipped (optional): {type(e).__name__}: {e}")
 
@@ -413,12 +441,16 @@ def analyze_track(
                     if mix_in or mix_out:
                         db.add_track(metadata)
 
-                audio_cache.clear()
                 logger.info(f"  ✅ Structure: {len(structure.sections)} sections, kick={structure.kick_pattern}")
             except Exception as e:
                 logger.error(f"  Failed to save structure analysis: {e}", exc_info=True)
+            finally:
+                # CRITICAL: Always clear structure audio cache, even if save failed
+                audio_cache.clear()
         else:
             logger.warning(f"  ⚠️  No structure data saved (structure analysis failed)")
+            # Still clear cache even if structure analysis failed
+            audio_cache.clear()
 
         logger.info(f"  ✅ {artist} — {title} | {bpm:.0f} BPM, Key: {key}")
         return True, metadata
@@ -458,12 +490,23 @@ def main():
         # Initialize progress
         db.set_analysis_progress(total=total_to_process, processed=0)
 
+        # ========== MEMORY MANAGEMENT ==========
+        # Create pipeline ONCE and reuse across all tracks (critical for memory efficiency)
+        try:
+            from autodj.analyze.pipeline import DJAnalysisPipeline
+            from autodj.analyze.dsp_config import DSPConfig
+            pipeline = DJAnalysisPipeline(config=DSPConfig())
+            logger.debug("✓ Initialized DJAnalysisPipeline (reused across all tracks)")
+        except ImportError:
+            pipeline = None
+            logger.warning("⚠️  DJAnalysisPipeline not available, Phase 3/4 will be skipped")
+
         # Analyze each track
         processed = 0
         skipped = 0
         errors = 0
 
-        for file_path in to_process:
+        for i, file_path in enumerate(to_process):
             # Re-check if analyzed (race-safe)
             existing = db.get_track_by_path(str(file_path))
             if existing:
@@ -472,8 +515,8 @@ def main():
                 db.update_analysis_progress(1)
                 continue
 
-            # Analyze track
-            success, metadata = analyze_track(str(file_path), db, config)
+            # Analyze track (pass pipeline for memory reuse)
+            success, metadata = analyze_track(str(file_path), db, config, pipeline=pipeline)
             if success:
                 processed += 1
                 db.update_analysis_progress(1)
@@ -481,9 +524,15 @@ def main():
                 errors += 1
                 db.update_analysis_progress(1)
 
-            # Explicit garbage collection after each track to prevent memory buildup
-            # aubio/essentia can hold onto memory even after processing completes
+            # Aggressive garbage collection every track to prevent memory buildup
+            # aubio/essentia/librosa can hold onto memory even after processing completes
             gc.collect()
+
+            # Extra aggressive cleanup every 10 tracks
+            if (i + 1) % 10 == 0:
+                logger.debug(f"Deep memory cleanup at track {i + 1}/{total_to_process}...")
+                gc.collect()
+                gc.collect()  # Run GC twice to catch circular references
 
         # Get stats and log summary
         stats = db.get_stats()

@@ -9,7 +9,7 @@ seed_track_path = ""
 bpm_tolerance_percent = 15.0
 energy_window_size = 3
 min_track_duration_seconds = 120
-max_track_duration_seconds = 1200
+max_track_duration_seconds = 1020
 max_repeat_decay_hours = 168
 
 [analysis]
@@ -77,3 +77,8 @@ api_path = "/rest"
 username = ""
 password = ""
 connect_timeout_sec = 5
+
+[discord]
+enabled = true
+token = "env:DISCORD_TOKEN"
+channel_id = "env:DISCORD_CHANNEL_ID"
