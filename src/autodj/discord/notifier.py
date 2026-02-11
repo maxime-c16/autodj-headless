@@ -11,8 +11,9 @@ Usage:
 import discord
 import os
 import asyncio
+import threading
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 
 class DiscordNotifier:
@@ -25,62 +26,86 @@ class DiscordNotifier:
         self.enabled = bool(self.token and self.channel_id)
         
         if not self.enabled:
-            print("[Discord] Notifier disabled (missing TOKEN or CHANNEL_ID)")
+            print("[Discord] ⚠️  Notifier disabled (missing TOKEN or CHANNEL_ID)")
     
-    async def _send_embed(self, embed: discord.Embed) -> bool:
-        """Internal: Send embed to Discord channel
+    def _send_embed_sync(self, embed: discord.Embed) -> bool:
+        """Send embed to Discord (synchronous wrapper)
         
-        Returns:
-            True if successful, False otherwise
+        Runs async code in a new thread with its own event loop
         """
         if not self.enabled:
             return False
         
+        def run_async():
+            try:
+                # Create new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Run the async function
+                result = loop.run_until_complete(self._send_embed_async(embed))
+                loop.close()
+                return result
+            except Exception as e:
+                print(f"[Discord] Error in async send: {e}")
+                return False
+        
+        # Run in thread to avoid blocking
+        thread = threading.Thread(target=run_async, daemon=True)
+        thread.start()
+        thread.join(timeout=10)  # Wait max 10 seconds
+        return True
+    
+    async def _send_embed_async(self, embed: discord.Embed) -> bool:
+        """Internal async: Send embed to Discord channel
+        
+        Returns:
+            True if successful, False otherwise
+        """
         try:
-            client = discord.Client(intents=discord.Intents.default())
+            print(f"[Discord] 📤 Sending message to channel {self.channel_id}...")
+            
+            # Create client with proper intents
+            intents = discord.Intents.default()
+            client = discord.Client(intents=intents)
+            
+            # Login and send
             await client.login(self.token)
+            
+            # Small delay to ensure we're ready
+            await asyncio.sleep(0.5)
+            
             channel = client.get_channel(int(self.channel_id))
             
             if not channel:
-                print(f"[Discord] Channel {self.channel_id} not found")
+                print(f"[Discord] ❌ Channel {self.channel_id} not found or inaccessible")
                 await client.close()
                 return False
             
+            print(f"[Discord] 📍 Found channel: {channel.name}")
             await channel.send(embed=embed)
+            print(f"[Discord] ✅ Message sent successfully!")
             await client.close()
             return True
             
+        except discord.errors.LoginFailure as e:
+            print(f"[Discord] ❌ Login failed (invalid token?): {e}")
+            return False
+        except discord.errors.NotFound as e:
+            print(f"[Discord] ❌ Channel not found: {e}")
+            return False
+        except discord.errors.Forbidden as e:
+            print(f"[Discord] ❌ Permission denied: {e}")
+            return False
         except Exception as e:
-            print(f"[Discord] Error sending embed: {e}")
+            print(f"[Discord] ❌ Error: {type(e).__name__}: {e}")
             return False
     
-    def post_phase_start(self, phase: str, estimated_duration: str) -> None:
-        """Post message when a phase is starting
-        
-        Args:
-            phase: Phase name (e.g., 'Analyze', 'Generate', 'Render')
-            estimated_duration: Estimated time (e.g., '3-5 minutes')
-        """
-        embed = discord.Embed(
-            title=f"🔄 AutoDJ: {phase} Starting...",
-            description=f"Estimated duration: {estimated_duration}",
-            color=0xffaa00,  # Orange
-            timestamp=datetime.utcnow()
-        )
-        embed.set_footer(text="AutoDJ Pipeline")
-        
-        asyncio.run(self._send_embed(embed))
-    
     def post_phase_complete(self, phase: str, details: Dict[str, Any]) -> None:
-        """Post message when a phase completes
-        
-        Args:
-            phase: Phase name
-            details: Dictionary of phase results
-        """
+        """Post message when a phase completes"""
         embed = discord.Embed(
             title=f"✅ AutoDJ: {phase} Complete",
-            color=0x00ff00,  # Green
+            color=0x00ff00,
             timestamp=datetime.utcnow()
         )
         
@@ -88,14 +113,10 @@ class DiscordNotifier:
             embed.add_field(name=key, value=str(value), inline=True)
         
         embed.set_footer(text="AutoDJ Pipeline")
-        asyncio.run(self._send_embed(embed))
+        self._send_embed_sync(embed)
     
     def post_playlist(self, transitions: Dict) -> None:
-        """Post formatted playlist when generated
-        
-        Args:
-            transitions: Transitions JSON dict from generate_set.py
-        """
+        """Post formatted playlist when generated"""
         tracks = transitions.get('transitions', [])
         duration_sec = transitions.get('mix_duration_seconds', 0)
         duration_str = f"{duration_sec//60}:{duration_sec%60:02d}"
@@ -127,14 +148,10 @@ class DiscordNotifier:
             )
         
         embed.set_footer(text="AutoDJ Pipeline")
-        asyncio.run(self._send_embed(embed))
+        self._send_embed_sync(embed)
     
     def post_complete(self, mix_info: Dict[str, Any]) -> None:
-        """Post message when entire pipeline completes
-        
-        Args:
-            mix_info: Dictionary with file details
-        """
+        """Post message when entire pipeline completes"""
         embed = discord.Embed(
             title="✅ AutoDJ Pipeline Complete!",
             description="Mix is ready for broadcast",
@@ -146,16 +163,10 @@ class DiscordNotifier:
             embed.add_field(name=key, value=str(value), inline=False)
         
         embed.set_footer(text="AutoDJ Pipeline")
-        asyncio.run(self._send_embed(embed))
+        self._send_embed_sync(embed)
     
     def post_error(self, phase: str, error_msg: str, log_path: Optional[str] = None) -> None:
-        """Post error notification when pipeline fails
-        
-        Args:
-            phase: Phase where error occurred
-            error_msg: Error message
-            log_path: Optional path to log file
-        """
+        """Post error notification when pipeline fails"""
         embed = discord.Embed(
             title=f"❌ AutoDJ Failed: {phase}",
             description=error_msg,
@@ -167,4 +178,4 @@ class DiscordNotifier:
             embed.add_field(name="Log File", value=log_path, inline=False)
         
         embed.set_footer(text="AutoDJ Pipeline")
-        asyncio.run(self._send_embed(embed))
+        self._send_embed_sync(embed)
