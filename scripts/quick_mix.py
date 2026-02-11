@@ -290,7 +290,7 @@ Examples:
     notifier.post_playlist({
         'transitions': transitions,
         'mix_duration_seconds': plan.get('mix_duration_seconds', 0)
-    })
+    }, db_path=DB_PATH)
     
     print(f"\nTransition Plan:")
     print("=" * 70)

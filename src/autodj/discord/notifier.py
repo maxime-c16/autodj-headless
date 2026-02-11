@@ -97,11 +97,32 @@ class DiscordNotifier:
             fields=details
         )
     
-    def post_playlist(self, transitions: Dict) -> None:
-        """Post formatted playlist when generated"""
+    def post_playlist(self, transitions: Dict, db_path: Optional[str] = None) -> None:
+        """Post formatted playlist when generated
+        
+        Args:
+            transitions: Dict with 'transitions' list and 'mix_duration_seconds'
+            db_path: Optional path to metadata.sqlite for looking up keys
+        """
+        import sqlite3
+        
         tracks_list = transitions.get('transitions', [])
         duration_sec = transitions.get('mix_duration_seconds', 0)
         duration_str = f"{duration_sec//60}:{duration_sec%60:02d}"
+        
+        # Load keys from database if path provided
+        keys_by_track_id = {}
+        if db_path:
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                c.execute('SELECT id, key FROM tracks')
+                for row in c.fetchall():
+                    keys_by_track_id[row['id']] = row['key']
+                conn.close()
+            except Exception as e:
+                print(f"[Discord] Warning: Could not load keys from database: {e}")
         
         # Build field content
         fields = {}
@@ -109,10 +130,24 @@ class DiscordNotifier:
             artist = track.get('artist', 'Unknown')
             title = track.get('title', 'Unknown')
             bpm = track.get('bpm', '?')
-            key = track.get('key', '?')
+            track_id = track.get('track_id')
+            
+            # Get key from database or from track data
+            key = track.get('key')
+            if not key and track_id and track_id in keys_by_track_id:
+                key = keys_by_track_id[track_id]
+            
+            # Format BPM to 1 decimal place
+            if isinstance(bpm, (int, float)):
+                bpm_str = f"{bpm:.1f}"
+            else:
+                bpm_str = str(bpm)
+            
+            # Format key
+            key_str = str(key) if key else "?"
             
             field_name = f"{i}. {artist[:20]}"
-            field_value = f"{title[:30]}\nBPM: {bpm} | Key: {key}"
+            field_value = f"**{title[:30]}**\nBPM: {bpm_str} | Key: {key_str}"
             fields[field_name] = field_value
         
         # Add summary
