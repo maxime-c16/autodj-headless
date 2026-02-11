@@ -32,6 +32,7 @@ from autodj.config import Config
 from autodj.db import Database
 from autodj.generate.playlist import generate
 from autodj.render.render import RenderEngine
+from autodj.discord.notifier import DiscordNotifier
 
 
 DB_PATH = "/app/data/db/metadata.sqlite"
@@ -283,6 +284,14 @@ Examples:
     with open(transitions_path) as f:
         plan = json.load(f)
     transitions = plan.get("transitions", [])
+    
+    # Post playlist notification to Discord
+    notifier = DiscordNotifier()
+    notifier.post_playlist({
+        'transitions': transitions,
+        'mix_duration_seconds': plan.get('mix_duration_seconds', 0)
+    })
+    
     print(f"\nTransition Plan:")
     print("=" * 70)
     for i, t in enumerate(transitions):
@@ -351,6 +360,13 @@ Examples:
         print(f"  Output: {args.output}")
         print(f"  Size:   {size_mb:.1f} MB")
         print(f"  Time:   {elapsed:.0f}s")
+        
+        # Post completion notification to Discord
+        notifier.post_complete({
+            'File': os.path.basename(args.output),
+            'Size': f'{size_mb:.1f} MB',
+            'Duration': f'{elapsed:.0f}s'
+        })
     else:
         print(f"\nFAILED after {elapsed:.0f}s")
         sys.exit(1)
