@@ -286,7 +286,7 @@ Examples:
     transitions = plan.get("transitions", [])
     
     # Post playlist notification to Discord
-    notifier = DiscordNotifier()
+    notifier = DiscordNotifier(config_dict=config.data)
     notifier.post_playlist({
         'transitions': transitions,
         'mix_duration_seconds': plan.get('mix_duration_seconds', 0)
@@ -346,11 +346,17 @@ Examples:
     print(f"\nRendering to {args.output}...")
     start = time.time()
     engine = RenderEngine(config=config.data)
+    
+    # Check EQ_ENABLED environment variable
+    eq_enabled = os.environ.get('EQ_ENABLED', 'true').lower() == 'true'
+    print(f"[DEBUG] EQ_ENABLED={eq_enabled}", flush=True)
+    
     success = engine.render_playlist(
         transitions_json_path=transitions_path,
         playlist_m3u_path=playlist_path,
         output_path=args.output,
         timeout_seconds=600,
+        eq_enabled=eq_enabled,
     )
     elapsed = time.time() - start
 

@@ -14,12 +14,28 @@ from typing import Dict, Any, Optional
 class DiscordNotifier:
     """Posts AutoDJ pipeline status to Discord using REST API"""
     
-    def __init__(self):
-        """Initialize notifier with token and channel from environment"""
+    def __init__(self, config_dict: Optional[Dict[str, Any]] = None):
+        """Initialize notifier with token and channel from environment or config
+        
+        Args:
+            config_dict: Optional config dictionary (typically from Config.load())
+                        Falls back to environment variables if not provided
+        """
+        # Try to get from environment variables first
         self.token = os.getenv('DISCORD_TOKEN')
         self.channel_id = os.getenv('DISCORD_CHANNEL_ID')
+        
+        # If not found in environment, try config dict
+        if not self.token or not self.channel_id:
+            if config_dict and 'discord' in config_dict:
+                discord_config = config_dict['discord']
+                self.token = self.token or discord_config.get('token')
+                self.channel_id = self.channel_id or discord_config.get('channel_id')
+        
         self.enabled = bool(self.token and self.channel_id)
-        self.api_url = f"https://discord.com/api/v10/channels/{self.channel_id}/messages"
+        
+        if self.enabled:
+            self.api_url = f"https://discord.com/api/v10/channels/{self.channel_id}/messages"
         
         if not self.enabled:
             print("[Discord] ⚠️  Notifier disabled (missing TOKEN or CHANNEL_ID)")
@@ -182,3 +198,4 @@ class DiscordNotifier:
             color=0xff0000,  # Red
             fields=fields
         )
+

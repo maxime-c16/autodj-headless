@@ -116,9 +116,31 @@ class Config:
         try:
             config_dict = toml.load(config_path)
             logger.info(f"Loaded config from {config_path}")
+            
+            # Process env: prefix values (e.g., "env:DISCORD_TOKEN" -> os.getenv("DISCORD_TOKEN"))
+            cls._process_env_references(config_dict)
+            
             return cls(config_dict)
         except Exception as e:
             raise ConfigError(f"Failed to load config from {config_path}: {e}")
+    
+    @staticmethod
+    def _process_env_references(config_dict: Dict[str, Any]) -> None:
+        """
+        Recursively process 'env:VAR_NAME' references in config.
+        
+        Replaces strings like "env:DISCORD_TOKEN" with os.getenv("DISCORD_TOKEN").
+        Modifies config_dict in place.
+        """
+        for key, value in config_dict.items():
+            if isinstance(value, dict):
+                Config._process_env_references(value)
+            elif isinstance(value, str) and value.startswith("env:"):
+                env_var = value[4:]  # Remove "env:" prefix
+                env_value = os.getenv(env_var)
+                config_dict[key] = env_value
+                if not env_value:
+                    logger.warning(f"Config key '{key}' references missing env var: {env_var}")
 
     def _validate(self) -> None:
         """

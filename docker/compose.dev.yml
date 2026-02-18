@@ -37,6 +37,7 @@ services:
       - ../data/db:/app/data/db               # SQLite database
       - ../data/playlists:/app/data/playlists  # Generated playlists
       - ../data/mixes:/app/data/mixes         # Output mix files
+      - ../data/logs:/app/data/logs           # DJ EQ debug logs
       # Music library (read-only)
       - /srv/nas/shared:/srv/nas/shared:ro    # Music library mount
 
@@ -62,6 +63,10 @@ services:
       NAVIDROME_HOST: "192.168.1.57"  # Server IP
       NAVIDROME_PORT: "4533"
       NAVIDROME_API_PATH: "/rest"
+
+      # Discord Integration (can be overridden at runtime)
+      # DISCORD_TOKEN: "" (set via 'docker-compose exec -e DISCORD_TOKEN=... or in .env)
+      # DISCORD_CHANNEL_ID: "" (set via 'docker-compose exec -e DISCORD_CHANNEL_ID=... or in .env)
 
       # Audio
       AUDIOREAD_FORMAT: "ffmpeg"
