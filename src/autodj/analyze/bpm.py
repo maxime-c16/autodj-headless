@@ -7,15 +7,40 @@ Per SPEC.md § 5.1:
 - Budget: ≤ 150 MiB peak memory
 - Single file at a time
 
+PHASE 0 FIX #1 (Confidence Threshold):
+- Integrated graduated 3-tier confidence validation
+- Thresholds: HIGH (0.90+), MEDIUM (0.70-0.89), LOW (<0.70)
+- Only accept BPM if confidence >= 0.70 (was 0.01)
+- MEDIUM confidence requires grid validation before use
+- Comprehensive logging of all validation decisions
+
 References:
 - https://essentia.upf.edu/tutorial_rhythm_beatdetection.html
 - https://github.com/aubio/aubio/issues/227
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# Import confidence validator
+try:
+    import sys
+    import os
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, parent_dir)
+    from confidence_validator import ConfidenceValidator, create_confidence_validator
+except ImportError:
+    logger.warning("ConfidenceValidator not available, using legacy threshold")
+    ConfidenceValidator = None
+
+# Import multi-pass validator
+try:
+    from bpm_multipass_validator import create_multipass_validator
+except ImportError:
+    logger.warning("BPM multi-pass validator not available")
+    create_multipass_validator = None
 
 
 def _normalize_bpm(bpm: float, target_range: Tuple[float, float] = (85, 175)) -> float:
@@ -146,26 +171,44 @@ def _detect_bpm_aubio(audio_path: str, config: dict) -> Optional[Tuple[float, fl
 
 def detect_bpm(audio_path: str, config: dict) -> Optional[float]:
     """
-    Detect BPM from audio file using multiple methods.
+    Detect BPM from audio file using multiple methods with confidence validation.
 
-    Strategy:
-    1. Try aubio first (streaming, memory-efficient, works in 512MB container)
-    2. If aubio confidence is very low, try essentia on short tracks only
-    3. Normalize BPM to DJ-friendly range (85-175 BPM)
-    4. Accept lower confidence threshold since we normalize anyway
+    PHASE 0 FIX #1: Graduated Confidence Validation
+    - Pass 1: Try aubio (streaming, memory-efficient)
+    - Pass 2: Try essentia for small files if aubio confidence < 0.2
+    - Pass 3: Validate confidence using 3-tier system
+      * HIGH (0.90+): Use directly
+      * MEDIUM (0.70-0.89): Use with grid validation
+      * LOW (<0.70): Require manual verification
+    - Normalize BPM to DJ-friendly range (85-175 BPM)
 
     Args:
         audio_path: Path to audio file
-        config: Analysis config dict
+        config: Analysis config dict with:
+            - confidence_high_threshold (default 0.90)
+            - confidence_medium_threshold (default 0.70)
+            - bpm_search_range (default [50, 200])
 
     Returns:
-        BPM value (float, range 85-175) or None if detection failed
+        BPM value (float, range 85-175) or None if failed
+        
+    Note: Use detect_bpm_with_validation() for detailed validation info
     """
     import os
 
     bpm_range = config.get("bpm_search_range", [50, 200])
-    # Very lenient threshold - we trust the normalization
-    confidence_threshold = config.get("confidence_threshold", 0.05)
+    
+    # PHASE 0 FIX: Initialize confidence validator (3-tier system)
+    validator = None
+    if ConfidenceValidator:
+        try:
+            validator = create_confidence_validator({
+                'confidence_high_threshold': config.get('confidence_high_threshold', 0.90),
+                'confidence_medium_threshold': config.get('confidence_medium_threshold', 0.70),
+                'enable_logging': True,
+            })
+        except Exception as e:
+            logger.warning(f"Could not initialize confidence validator: {e}")
 
     detected_bpm = None
     confidence = 0.0
@@ -178,7 +221,6 @@ def detect_bpm(audio_path: str, config: dict) -> Optional[float]:
         method = "aubio"
 
     # If aubio failed or very low confidence, try essentia for small files only
-    # (essentia loads entire file into memory - risky for large files in 512MB container)
     if detected_bpm is None or confidence < 0.2:
         try:
             file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
@@ -199,13 +241,30 @@ def detect_bpm(audio_path: str, config: dict) -> Optional[float]:
         logger.warning("All BPM detection methods failed")
         return None
 
-    # Check minimum confidence (very lenient)
-    if confidence < confidence_threshold:
-        logger.warning(
-            f"BPM confidence {confidence:.2f} below threshold {confidence_threshold}. "
-            f"Detected {detected_bpm:.1f} BPM via {method}. Rejecting."
+    # PHASE 0 FIX: Validate confidence using 3-tier system
+    if validator:
+        validation_result = validator.validate_bpm_confidence(
+            detected_bpm, confidence, method
         )
-        return None
+        
+        if not validation_result.valid:
+            logger.error(validation_result.message)
+            return None
+        
+        if validation_result.requires_validation:
+            logger.warning(
+                f"BPM {detected_bpm:.1f} has MEDIUM confidence ({confidence:.2f}). "
+                "Will require grid validation before use."
+            )
+    else:
+        # Fallback: Use old threshold (0.70 as new minimum)
+        minimum_threshold = config.get("confidence_threshold", 0.70)
+        if confidence < minimum_threshold:
+            logger.warning(
+                f"BPM confidence {confidence:.2f} below threshold {minimum_threshold}. "
+                f"Detected {detected_bpm:.1f} BPM via {method}. Rejecting."
+            )
+            return None
 
     # Normalize to DJ-friendly range (handles half/double tempo issues)
     normalized_bpm = _normalize_bpm(detected_bpm, (85, 175))
@@ -221,4 +280,115 @@ def detect_bpm(audio_path: str, config: dict) -> Optional[float]:
         f"✅ BPM detected: {normalized_bpm:.1f} "
         f"(raw: {detected_bpm:.1f}, method: {method}, confidence: {confidence:.2f})"
     )
+    
     return normalized_bpm
+
+
+def detect_bpm_with_validation(audio_path: str, config: dict) -> Optional[Dict[str, Any]]:
+    """
+    Detect BPM with detailed validation information (PHASE 0 FIX #1 & #2).
+
+    PHASE 0 FIX #2: Multi-Pass Validation with Octave Error Detection
+    - Uses 3-pass voting system
+    - Detects and corrects octave errors (BPM/2, BPM*2)
+    - Provides detailed validation metadata
+
+    Returns dict with:
+        - bpm: Detected BPM (float)
+        - confidence: Confidence score (0-1)
+        - method: Detection method ("aubio", "essentia")
+        - validation_result: ConfidenceValidator result object
+        - multipass_result: Multi-pass voting result
+        - tier: Confidence tier ("high", "medium", "low")
+        - recommendation: Action to take
+        
+    Or None if detection failed.
+    """
+    import os
+
+    bpm_range = config.get("bpm_search_range", [50, 200])
+    
+    # Initialize validators
+    confidence_validator = None
+    multipass_validator = None
+    
+    if ConfidenceValidator:
+        try:
+            confidence_validator = create_confidence_validator({
+                'confidence_high_threshold': config.get('confidence_high_threshold', 0.90),
+                'confidence_medium_threshold': config.get('confidence_medium_threshold', 0.70),
+                'enable_logging': True,
+            })
+        except Exception as e:
+            logger.warning(f"Could not initialize confidence validator: {e}")
+    
+    if create_multipass_validator:
+        try:
+            multipass_validator = create_multipass_validator(config)
+        except Exception as e:
+            logger.warning(f"Could not initialize multipass validator: {e}")
+
+    detected_bpm = None
+    confidence = 0.0
+    method = None
+
+    # Try aubio first (streaming, memory-efficient)
+    result = _detect_bpm_aubio(audio_path, config)
+    if result:
+        detected_bpm, confidence = result
+        method = "aubio"
+
+    # If aubio failed or very low confidence, try essentia for small files only
+    if detected_bpm is None or confidence < 0.2:
+        try:
+            file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+            if file_size_mb < 30:
+                essentia_result = _detect_bpm_essentia(audio_path)
+                if essentia_result:
+                    essentia_bpm, essentia_conf = essentia_result
+                    if essentia_conf > confidence:
+                        detected_bpm, confidence = essentia_bpm, essentia_conf
+                        method = "essentia"
+        except Exception as e:
+            logger.debug(f"Essentia fallback skipped: {e}")
+
+    if detected_bpm is None:
+        return None
+
+    # Normalize BPM
+    normalized_bpm = _normalize_bpm(detected_bpm, (85, 175))
+
+    # PHASE 0 FIX #2: Multi-pass validation with octave error detection
+    multipass_result = None
+    if multipass_validator:
+        try:
+            multipass_result = multipass_validator.validate_bpm_multipass(
+                audio_path, config, normalized_bpm, confidence, method
+            )
+            normalized_bpm = multipass_result.bpm
+            confidence = multipass_result.confidence
+        except Exception as e:
+            logger.warning(f"Multi-pass validation failed: {e}")
+
+    # Validate using confidence validator
+    validation_result = None
+    if confidence_validator:
+        validation_result = confidence_validator.validate_bpm_confidence(
+            normalized_bpm, confidence, method
+        )
+
+    if not (bpm_range[0] <= normalized_bpm <= bpm_range[1]):
+        return None
+
+    return {
+        'bpm': normalized_bpm,
+        'confidence': confidence,
+        'method': method,
+        'validation_result': validation_result,
+        'multipass_result': multipass_result,
+        'tier': validation_result.tier.value if validation_result else "unknown",
+        'recommendation': validation_result.recommendation if validation_result else "fallback",
+        'raw_bpm': detected_bpm,
+        'multipass_agreement': multipass_result.agreement_level if multipass_result else "unknown",
+        'octave_error_detected': multipass_result.octave_error_detected if multipass_result else False,
+    }

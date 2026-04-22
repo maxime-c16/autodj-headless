@@ -47,6 +47,19 @@ crossfade_duration_long = 5.0   # For non-compatible tracks
 # Tempo Ramping (Phase 2 - experimental)
 enable_tempo_ramping = false
 
+# PHASE 4: Feature Flags for Production Rollout
+# Fix #1: Confidence Threshold Validation (Day 1)
+confidence_validator_enabled = true
+
+# Fix #2: BPM Multi-Pass Validation (Day 2)
+bpm_multipass_enabled = true
+
+# Fix #3: Grid Validation (Day 3)
+grid_validation_enabled = true
+
+# Foundation: Adaptive Bass Cut (Day 4)
+adaptive_bass_enabled = true
+
 # Fade Curves
 fade_type = "sin"              # sin/lin/exp (sine recommended for smooth audio)
 

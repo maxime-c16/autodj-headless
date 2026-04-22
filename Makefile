@@ -1,4 +1,4 @@
-.PHONY: help dev-up dev-down rebuild analyze generate render clean logs nightly nightly-status quick-mix quick-list quick-search
+.PHONY: help dev-up dev-down rebuild analyze generate render clean logs nightly nightly-status quick-mix quick-list quick-search a-b-test
 
 # Project Configuration
 PROJECT_NAME := autodj
@@ -24,6 +24,7 @@ help:
 	@echo "    make analyze          Run MIR analysis on library"
 	@echo "    make generate         Generate DJ playlist & transition plan"
 	@echo "    make render           Render offline mix via Liquidsoap"
+	@echo "    make render EQ=off    Render without EQ automation (baseline)"
 	@echo ""
 	@echo "  🔧 INFRASTRUCTURE"
 	@echo "    make rebuild          Rebuild base Docker image (rare)"
@@ -35,8 +36,20 @@ help:
 	@echo "  🎧 QUICK MIX (test render)"
 	@echo "    make quick-mix SEED='Deine Angst' TRACK_COUNT=3"
 	@echo "    make quick-mix TRACKS='track1, track2, track3'"
+	@echo "    make quick-mix ALBUM='Rusty Chains'     Full album as mix"
+	@echo "    make quick-mix ALBUM='Rusty Chains' EQ=on"
 	@echo "    make quick-search Q='klangkuenstler'"
 	@echo "    make quick-list           List all tracks in library"
+	@echo ""
+	@echo "  🎪 SHOWCASE MIXES (pre-configured albums)"
+	@echo "    make showcase-rusty-chains      Showcase: Rusty Chains album (7 tracks)"
+	@echo "    make showcase-never-enough      Showcase: Never Enough - EP (4 tracks, zone-based)"
+	@echo "    make showcase-list              List available showcases"
+	@echo ""
+	@echo "  🎚️  A/B TESTING (Intra-Track EQ)"
+	@echo "    make a-b-test TRACK='Never Enough'"
+	@echo "    make a-b-test TRACK='Never Enough' OUTPUT='./my_tests'"
+	@echo "    make a-b-test TRACK='Never Enough' EQ=off  # Disable EQ for baseline"
 	@echo ""
 	@echo "  🧹 UTILITIES"
 	@echo "    make clean            Remove containers & volumes"
@@ -103,7 +116,8 @@ generate:
 render:
 	@echo "🎚️  Rendering offline mix..."
 	@echo "📊 Per SPEC.md: ≤7 min for 60-min mix, ≤512 MiB RAM"
-	docker-compose -f $(DEV_COMPOSE) exec -T autodj \
+	@EQ_ENABLED=$$([ "$(EQ)" = "off" ] && echo "false" || echo "true") && \
+	docker-compose -f $(DEV_COMPOSE) exec -T -e EQ_ENABLED="$$EQ_ENABLED" autodj \
 		python -m src.scripts.render_set
 	@echo "✅ Mix rendering complete. Check data/mixes/ for output."
 
@@ -154,24 +168,40 @@ nightly-status:
 # ==================== QUICK MIX (test render) ====================
 
 quick-mix:
-	@if [ -z "$(TRACKS)" ] && [ -z "$(SEED)" ] && [ -z "$(SEED_TRACK_ID)" ]; then \
+	@if [ -z "$(TRACKS)" ] && [ -z "$(SEED)" ] && [ -z "$(SEED_TRACK_ID)" ] && [ -z "$(ALBUM)" ]; then \
 		echo "🎧 Quick Mix — test render with human-readable track names"; \
 		echo ""; \
 		echo "Usage:"; \
 		echo "  make quick-mix SEED='Deine Angst' TRACK_COUNT=3"; \
+		echo "  make quick-mix SEED='Deine Angst' TRACK_COUNT=3 EQ=on"; \
 		echo "  make quick-mix SEED='klangkuenstler' TRACK_COUNT=5"; \
 		echo "  make quick-mix TRACKS='Deine Angst, Toter Schmetterling, Blood On My Hands'"; \
+		echo "  make quick-mix TRACKS='Deine Angst, ...' EQ=off"; \
+		echo "  make quick-mix ALBUM='Rusty Chains'              # Full album as mix"; \
+		echo "  make quick-mix ALBUM='Never Enough' EQ=on"; \
+		echo ""; \
+		echo "EQ Options (default: on):"; \
+		echo "  EQ=on   — Enable aggressive DJ EQ automation (15-20 skills/track)"; \
+		echo "  EQ=off  — Disable EQ (baseline, no automation)"; \
 		echo ""; \
 		echo "Browse library:"; \
 		echo "  make quick-search Q='klangkuenstler'"; \
 		echo "  make quick-list"; \
+		echo ""; \
+		echo "Pre-configured showcases:"; \
+		echo "  make showcase-list                # List all showcases"; \
+		echo "  make showcase-rusty-chains        # 7-track album showcase"; \
+		echo "  make showcase-never-enough        # 4-track zone-based showcase"; \
 		exit 1; \
 	fi
-	@docker-compose -f $(DEV_COMPOSE) exec -T \
+	@EQ_ENABLED=$$([ "$(EQ)" = "off" ] && echo "false" || echo "true") && \
+	docker-compose -f $(DEV_COMPOSE) exec -T \
 		-e TRACKS="$(TRACKS)" \
 		-e SEED="$(SEED)" \
 		-e SEED_TRACK_ID="$(SEED_TRACK_ID)" \
+		-e ALBUM="$(ALBUM)" \
 		-e TRACK_COUNT="$(TRACK_COUNT)" \
+		-e EQ_ENABLED="$$EQ_ENABLED" \
 		autodj python3 /app/scripts/quick_mix.py
 
 quick-list:
@@ -181,6 +211,70 @@ quick-list:
 quick-search:
 	@docker-compose -f $(DEV_COMPOSE) exec -T autodj \
 		python3 /app/scripts/quick_mix.py --search "$(Q)"
+
+# ==================== SHOWCASE MIXES (Pre-Configured Albums) ====================
+
+showcase-rusty-chains:
+	@echo "🎪 Rendering Rusty Chains album showcase..."
+	@echo "📊 7 tracks with aggressive DJ EQ automation"
+	@echo ""
+	docker-compose -f $(DEV_COMPOSE) exec -T \
+		-e EQ_ENABLED="true" \
+		autodj python3 -m scripts.rusty_chains_showcase
+	@echo "✅ Showcase complete! Check data/mixes/ for output."
+
+showcase-never-enough:
+	@echo "🎪 Rendering Never Enough - EP showcase (zone-based)..."
+	@echo "📊 4 tracks with all musical zones targeted (intro/verse/chorus/drop/etc)"
+	@echo ""
+	docker-compose -f $(DEV_COMPOSE) exec -T \
+		-e EQ_ENABLED="true" \
+		autodj python3 -m scripts.never_enough_showcase
+	@echo "✅ Showcase complete! Check data/mixes/ for output."
+
+showcase-list:
+	@echo "🎪 Available Showcase Mixes"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "  📀 Rusty Chains (7-track album)"
+	@echo "     make showcase-rusty-chains"
+	@echo "     Features: Beat-synced DJ automation throughout"
+	@echo "     Output: data/mixes/rusty-chains-showcase-*.mp3"
+	@echo ""
+	@echo "  📀 Never Enough - EP (4-track zone-based showcase)"
+	@echo "     make showcase-never-enough"
+	@echo "     Features: All musical zones targeted (intro/verse/chorus/drop/breakdown/build/outro)"
+	@echo "     Output: data/mixes/never-enough-showcase-*.mp3"
+	@echo ""
+	@echo "Previously rendered showcases in data/mixes/:"
+	@ls -lh $(CURDIR)/data/mixes/*showcase*.mp3 2>/dev/null || echo "  No showcase mixes yet."
+	@echo ""
+
+# ==================== A/B TESTING (Intra-Track EQ Automation) ====================
+
+a-b-test:
+	@if [ -z "$(TRACK)" ]; then \
+		echo "🎧 A/B Test — Generate 3 variants with different EQ strategies"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  make a-b-test TRACK='Never Enough'"; \
+		echo "  make a-b-test TRACK='Never Enough' OUTPUT='./my_tests'"; \
+		echo ""; \
+		echo "This generates:"; \
+		echo "  [A] Baseline (no EQ cuts)"; \
+		echo "  [B] Moderate (2-3 high-confidence cuts)"; \
+		echo "  [C] Aggressive (all detected cuts)"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "🎛️ Generating A/B test variants for: $(TRACK)"
+	@docker-compose -f $(DEV_COMPOSE) exec -T \
+		-e TRACK="$(TRACK)" \
+		-e OUTPUT="$(OUTPUT)" \
+		autodj python3 src/scripts/a_b_test_intra_eq.py \
+		--track-id "$(TRACK)" \
+		--output-dir "$(OUTPUT)"
+	@echo "✅ A/B test complete! Check output directory for WAV files."
 
 # ==================== INTERNAL TARGETS (not for direct use) ====================
 

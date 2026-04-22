@@ -50,7 +50,8 @@ class MerlinGreedySelector:
         """
         self.db = database
         self.constraints = constraints
-        self.used_in_set: Set[str] = set()
+        self.used_in_set: Set[str] = set()  # Track used IDs
+        self.used_titles: Set[str] = set()  # Track used titles (prevent duplicate songs)
         logger.info("MerlinGreedySelector initialized")
 
     @staticmethod
@@ -159,8 +160,14 @@ class MerlinGreedySelector:
 
         for candidate in candidates:
             track_id = candidate.get("id")
+            track_title = candidate.get("title", "").lower()
+            
             if track_id in self.used_in_set:
                 continue  # Already used in this set
+            
+            if track_title and track_title in self.used_titles:
+                logger.debug(f"Track '{track_title}' already in set; skipping duplicate song")
+                continue  # Skip duplicate song titles
 
             if self._is_recently_used(track_id, self.constraints.max_repeat_decay):
                 logger.debug(f"Track {track_id} recently used; skipping")
@@ -223,14 +230,20 @@ class MerlinGreedySelector:
                     "valid_count": len(relaxed),
                     "relaxed": "key",
                 }
+                self.used_titles.add(track_title.lower())
                 return (track_id, hints)
 
             # 2) Ignore BPM compatibility as last resort
             relaxed2 = []
             for candidate in candidates:
                 track_id = candidate.get("id")
+                track_title = candidate.get("title", "").lower()
+                
                 if track_id in self.used_in_set:
                     continue
+                    
+                if track_title and track_title in self.used_titles:
+                    continue  # Skip duplicate song titles
 
                 if self._is_recently_used(track_id, self.constraints.max_repeat_decay):
                     continue
@@ -242,7 +255,9 @@ class MerlinGreedySelector:
                 logger.warning("No candidates after relaxing key — relaxing BPM too")
                 chosen = relaxed2[0]
                 track_id = chosen.get("id")
+                track_title = chosen.get("title", "").lower()
                 self.used_in_set.add(track_id)
+                self.used_titles.add(track_title)
                 hints = {
                     "bpm": chosen.get("bpm"),
                     "key": chosen.get("key"),
@@ -258,8 +273,10 @@ class MerlinGreedySelector:
         # In future: sort by energy distance or harmonic score
         chosen = valid_candidates[0]
         track_id = chosen.get("id")
+        track_title = chosen.get("title", "").lower()
 
         self.used_in_set.add(track_id)
+        self.used_titles.add(track_title)
 
         hints = {
             "bpm": chosen.get("bpm"),
@@ -307,6 +324,7 @@ class MerlinGreedySelector:
         target_duration_seconds = target_duration_minutes * 60
 
         self.used_in_set.add(seed_track_id)
+        self.used_titles.add(seed_track.get("title", "").lower())
 
         logger.info(
             f"Building playlist from seed {seed_track_id} "

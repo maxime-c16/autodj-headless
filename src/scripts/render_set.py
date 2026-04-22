@@ -8,10 +8,14 @@ Per SPEC.md § 2.3:
 - Max 7 min for 60-min mix
 - Peak memory ≤ 512 MiB
 - Outputs: MP3 or FLAC mix file
+
+Environment variables:
+- EQ_ENABLED: Set to "true" or "false" to control DJ EQ automation (default: true)
 """
 
 import sys
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
 import time
@@ -88,11 +92,35 @@ def main():
         output_format = config["render"]["output_format"]
         output_path = mixes_dir / f"{timestamp}.{output_format}"
 
+        # Check EQ_ENABLED flag (environment variable)
+        eq_enabled_str = os.environ.get("EQ_ENABLED", "true").lower()
+        eq_enabled = eq_enabled_str in ("true", "1", "yes", "on")
+        
         # Log render parameters
         logger.info(f"Output format: {output_format}")
         logger.info(f"Output bitrate: {config['render'].get('mp3_bitrate', 192)} kbps")
         logger.info(f"Crossfade duration: {config['render'].get('crossfade_duration_seconds', 4)} sec")
+        logger.info(f"DJ EQ Automation: {'ENABLED' if eq_enabled else 'DISABLED'}")
         logger.info(f"Rendering to: {output_path}")
+
+        # Pre-process vocal preview mixing (NEW!)
+        logger.info("\n🎧 Preprocessing vocal preview mixing...")
+        import sys
+        from pathlib import Path as PathlibPath
+        sys.path.insert(0, str(PathlibPath(__file__).parent))
+        from preprocess_vocal_previews import preprocess_vocal_previews
+        
+        vocal_preview_dir = Path(config["system"]["playlists_path"]) / "vocal_previews"
+        preprocess_success = preprocess_vocal_previews(
+            str(latest_transitions),
+            str(vocal_preview_dir),
+            config
+        )
+        
+        if preprocess_success:
+            logger.info("✅ Vocal preview preprocessing complete")
+        else:
+            logger.warning("⚠️  Vocal preview preprocessing failed (proceeding without)")
 
         # Load transitions to determine segment count
         import json
@@ -135,6 +163,7 @@ def main():
             output_path=str(output_path),
             config=config.data,  # Pass underlying dict, not Config object
             progress_callback=progress_callback if enable_progress_display else None,
+            eq_enabled=eq_enabled,  # Pass EQ enabled flag
         )
 
         # Mark progress as complete

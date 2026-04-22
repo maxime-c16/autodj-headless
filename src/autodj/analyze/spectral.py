@@ -130,10 +130,29 @@ def load_audio(file_path: str) -> Tuple[np.ndarray, int]:
     try:
         if suffix == ".wav":
             sr, audio = wavfile.read(file_path)
+            orig_dtype = audio.dtype  # Save before np.mean() may change dtype
             # Convert stereo to mono if needed
             if len(audio.shape) > 1:
                 audio = np.mean(audio, axis=1)
-            return audio.astype(np.float32) / 32768.0, sr
+            # Dtype-aware normalization (use orig_dtype — mean() promotes int→float)
+            if orig_dtype == np.int16:
+                audio = audio.astype(np.float32) / 32768.0
+            elif orig_dtype == np.int32:
+                # scipy returns int32 for both 24-bit and 32-bit WAV
+                audio = audio.astype(np.float32) / 2147483648.0
+            elif orig_dtype == np.uint8:
+                # 8-bit WAV is unsigned, range [0, 255], center at 128
+                audio = (audio.astype(np.float32) - 128.0) / 128.0
+            elif orig_dtype in (np.float32, np.float64):
+                audio = audio.astype(np.float32)  # Already normalized to [-1, 1]
+            else:
+                raise ValueError(f"Unsupported WAV dtype: {orig_dtype}")
+            # Warn on SR mismatch — analysis may be inaccurate
+            if sr != SAMPLE_RATE:
+                logger.warning(
+                    f"WAV SR {sr} != expected {SAMPLE_RATE}. Analysis may be inaccurate."
+                )
+            return audio, sr
         else:
             # For mp3, m4a, etc., try librosa
             try:
@@ -181,7 +200,7 @@ def analyze_energy_profile(
         audio, sr = load_audio(file_path)
 
     # Compute STFT
-    S = signal.stft(audio, fs=sr, nperseg=n_fft, noverlap=n_fft - hop)
+    S = signal.stft(audio, fs=sr, nperseg=n_fft, noverlap=n_fft - hop, window=WINDOW)
     freqs = S[0]
     times = S[1]
     Sxx = S[2]
@@ -240,7 +259,7 @@ def detect_energy_peaks(
     peaks, _ = signal.find_peaks(
         spectrum_norm,
         height=threshold,
-        distance=int(min_distance * 44100 / HOP_LENGTH)  # Convert to samples
+        distance=int(min_distance * SAMPLE_RATE / HOP_LENGTH)  # Convert to samples
     )
     
     return peaks.tolist()
@@ -414,7 +433,7 @@ def spectral_characteristics(
         audio, sr = load_audio(file_path)
 
     # Compute FFT
-    S = signal.stft(audio, fs=sr, nperseg=n_fft, noverlap=n_fft - hop)
+    S = signal.stft(audio, fs=sr, nperseg=n_fft, noverlap=n_fft - hop, window=WINDOW)
     freqs = S[0]
     Sxx = np.abs(S[2])
 

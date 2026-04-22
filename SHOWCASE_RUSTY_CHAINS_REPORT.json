@@ -1,0 +1,235 @@
+{
+  "album_name": "Rusty Chains",
+  "artist": "\u00d8RGIE",
+  "bpm": 128.0,
+  "total_duration_minutes": 23.0,
+  "total_bars": 704.0,
+  "sections_rendered": 7,
+  "total_techniques_applied": 21,
+  "sections": [
+    {
+      "section_index": 0,
+      "section_name": "Opening",
+      "duration_minutes": 3.5,
+      "bars": 112.0,
+      "energy_level": "build",
+      "style": "Intro buildup",
+      "techniques_selected": 4,
+      "validation_status": "REQUIRES_ATTENTION",
+      "glitch_issues": 4,
+      "code_lines": 70,
+      "techniques": [
+        {
+          "name": "Bass Cut + Roll",
+          "bar": 8.0,
+          "duration": 3.2788535969157673,
+          "frequency": 9
+        },
+        {
+          "name": "Stutter/Loop Roll",
+          "bar": 19.278853596915766,
+          "duration": 1.6123257496397494,
+          "frequency": 8
+        },
+        {
+          "name": "Filter Sweep",
+          "bar": 28.891179346555514,
+          "duration": 4.8928429525952915,
+          "frequency": 8
+        },
+        {
+          "name": "Quick Cut + Reverb",
+          "bar": 41.784022299150806,
+          "duration": 1.0,
+          "frequency": 8
+        }
+      ]
+    },
+    {
+      "section_index": 1,
+      "section_name": "Main Theme",
+      "duration_minutes": 3.2,
+      "bars": 102.4,
+      "energy_level": "peak",
+      "style": "Tech house groove",
+      "techniques_selected": 3,
+      "validation_status": "REQUIRES_ATTENTION",
+      "glitch_issues": 3,
+      "code_lines": 62,
+      "techniques": [
+        {
+          "name": "Mute + Dim",
+          "bar": 8.0,
+          "duration": 1.6766994874229113,
+          "frequency": 8
+        },
+        {
+          "name": "Echo Out + Return",
+          "bar": 17.676699487422912,
+          "duration": 3.784359135409691,
+          "frequency": 7
+        },
+        {
+          "name": "Loop Stutter Acceleration",
+          "bar": 29.461058622832603,
+          "duration": 2.265765459055811,
+          "frequency": 7
+        }
+      ]
+    },
+    {
+      "section_index": 2,
+      "section_name": "Breakdown",
+      "duration_minutes": 2.8,
+      "bars": 89.6,
+      "energy_level": "breakdown",
+      "style": "Atmospheric filter sweep",
+      "techniques_selected": 2,
+      "validation_status": "REQUIRES_ATTENTION",
+      "glitch_issues": 2,
+      "code_lines": 43,
+      "techniques": [
+        {
+          "name": "High-Mid Boost + Filter",
+          "bar": 8.0,
+          "duration": 2.0,
+          "frequency": 6
+        },
+        {
+          "name": "Reverb Tail Cut",
+          "bar": 18.0,
+          "duration": 1.0265359696838636,
+          "frequency": 6
+        }
+      ]
+    },
+    {
+      "section_index": 3,
+      "section_name": "Build Up",
+      "duration_minutes": 3.1,
+      "bars": 99.2,
+      "energy_level": "build",
+      "style": "Progressive stutter",
+      "techniques_selected": 4,
+      "validation_status": "REQUIRES_ATTENTION",
+      "glitch_issues": 4,
+      "code_lines": 64,
+      "techniques": [
+        {
+          "name": "Ping-Pong Pan",
+          "bar": 8.0,
+          "duration": 1.0,
+          "frequency": 5
+        },
+        {
+          "name": "Bass Cut + Roll",
+          "bar": 17.0,
+          "duration": 2.4408812440813934,
+          "frequency": 9
+        },
+        {
+          "name": "Mute + Dim",
+          "bar": 27.440881244081393,
+          "duration": 1.8094304566778265,
+          "frequency": 8
+        },
+        {
+          "name": "Stutter/Loop Roll",
+          "bar": 37.25031170075922,
+          "duration": 0.5097481395170915,
+          "frequency": 8
+        }
+      ]
+    },
+    {
+      "section_index": 4,
+      "section_name": "Peak Drop",
+      "duration_minutes": 3.8,
+      "bars": 121.6,
+      "energy_level": "peak",
+      "style": "Bass-heavy groove",
+      "techniques_selected": 3,
+      "validation_status": "REQUIRES_ATTENTION",
+      "glitch_issues": 3,
+      "code_lines": 55,
+      "techniques": [
+        {
+          "name": "Filter Sweep",
+          "bar": 8.0,
+          "duration": 6.792557579952907,
+          "frequency": 8
+        },
+        {
+          "name": "Filter Sweep",
+          "bar": 22.792557579952906,
+          "duration": 5.3610020660719675,
+          "frequency": 8
+        },
+        {
+          "name": "Bass Cut + Roll",
+          "bar": 36.153559646024874,
+          "duration": 2.310958999623563,
+          "frequency": 9
+        }
+      ]
+    },
+    {
+      "section_index": 5,
+      "section_name": "Extended Mix",
+      "duration_minutes": 3.6,
+      "bars": 115.2,
+      "energy_level": "peak",
+      "style": "Variation section",
+      "techniques_selected": 3,
+      "validation_status": "REQUIRES_ATTENTION",
+      "glitch_issues": 3,
+      "code_lines": 55,
+      "techniques": [
+        {
+          "name": "Quick Cut + Reverb",
+          "bar": 8.0,
+          "duration": 1.0,
+          "frequency": 8
+        },
+        {
+          "name": "Echo Out + Return",
+          "bar": 17.0,
+          "duration": 2.7598546012746747,
+          "frequency": 7
+        },
+        {
+          "name": "Quick Cut + Reverb",
+          "bar": 27.759854601274675,
+          "duration": 1.0,
+          "frequency": 8
+        }
+      ]
+    },
+    {
+      "section_index": 6,
+      "section_name": "Outro",
+      "duration_minutes": 2.0,
+      "bars": 64.0,
+      "energy_level": "fade",
+      "style": "Wind down",
+      "techniques_selected": 2,
+      "validation_status": "REQUIRES_ATTENTION",
+      "glitch_issues": 2,
+      "code_lines": 54,
+      "techniques": [
+        {
+          "name": "Loop Stutter Acceleration",
+          "bar": 8.0,
+          "duration": 1.7935626016660393,
+          "frequency": 7
+        },
+        {
+          "name": "High-Mid Boost + Filter",
+          "bar": 17.79356260166604,
+          "duration": 2.0,
+          "frequency": 6
+        }
+      ]
+    }
+  ]
+}

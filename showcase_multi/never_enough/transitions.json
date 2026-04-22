@@ -1,0 +1,50 @@
+[
+  {
+    "transition_id": "never_enough_-_ep_00",
+    "outgoing_id": "never_enough_01",
+    "incoming_id": "never_enough_02",
+    "phase1_start": 152.13114754098362,
+    "phase1_end": 160.0,
+    "phase2_enabled": true,
+    "phase2_hpf": 200.0,
+    "phase2_intensity": 0.71,
+    "phase4_strategy": "gradual",
+    "phase4_timing_var": 0.658913015196092
+  },
+  {
+    "transition_id": "never_enough_-_ep_01",
+    "outgoing_id": "never_enough_02",
+    "incoming_id": "never_enough_03",
+    "phase1_start": 242.32,
+    "phase1_end": 250.0,
+    "phase2_enabled": true,
+    "phase2_hpf": 200.0,
+    "phase2_intensity": 0.764,
+    "phase4_strategy": "instant",
+    "phase4_timing_var": -0.36027822983524466
+  },
+  {
+    "transition_id": "never_enough_-_ep_02",
+    "outgoing_id": "never_enough_03",
+    "incoming_id": "never_enough_04",
+    "phase1_start": 262.258064516129,
+    "phase1_end": 270.0,
+    "phase2_enabled": true,
+    "phase2_hpf": 200.0,
+    "phase2_intensity": 0.575,
+    "phase4_strategy": "gradual",
+    "phase4_timing_var": 2.0
+  },
+  {
+    "transition_id": "never_enough_-_ep_03",
+    "outgoing_id": "never_enough_04",
+    "incoming_id": "never_enough_05",
+    "phase1_start": 202.32,
+    "phase1_end": 210.0,
+    "phase2_enabled": true,
+    "phase2_hpf": 200.0,
+    "phase2_intensity": 0.755,
+    "phase4_strategy": "gradual",
+    "phase4_timing_var": -0.17684927605893314
+  }
+]

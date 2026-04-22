@@ -80,6 +80,7 @@ class LoopRegion:
     energy: float             # Energy level 0.0-1.0
     stability: float          # Repetition stability score 0.0-1.0
     label: str                # "drop_loop", "breakdown_loop", "intro_loop"
+    vocal_prominence: float = 0.0  # 0.0-1.0 (NEW - Phase 2: vocal content %)
 
 
 @dataclass
@@ -93,6 +94,7 @@ class TrackStructure:
     total_bars: int = 0
     kick_pattern: str = "none"           # "four_on_floor", "breakbeat", "minimal", "none"
     has_vocal: bool = False              # True if vocal content detected
+    vocal_regions: List[Tuple[float, float]] = field(default_factory=list)  # [(start, end), ...]
 
 
 # ============================================================================
@@ -866,6 +868,148 @@ def generate_semantic_cues(
     return cues
 
 
+def _compute_loop_stability(
+    first_loop: np.ndarray, second_loop: np.ndarray
+) -> float:
+    """
+    Compute loop stability robustly without NaN issues.
+
+    FIX #2: Replaces np.corrcoef() which returns NaN for:
+    - Constant signals (zero variance)
+    - High-energy signals with numerical issues
+    - Very short segments
+
+    Uses spectral-based similarity instead of direct correlation,
+    which is more robust and meaningful for audio.
+
+    Args:
+        first_loop: First loop segment (audio samples)
+        second_loop: Second loop segment (audio samples)
+
+    Returns:
+        Stability score in [0.0, 1.0]
+    """
+    # Pad to same length
+    min_len = min(len(first_loop), len(second_loop))
+    
+    if min_len == 0:
+        return 0.3  # Default fallback for empty segments
+    
+    first_loop = first_loop[:min_len]
+    second_loop = second_loop[:min_len]
+    
+    # Method 1: Try direct correlation first (works for most cases)
+    try:
+        corr = np.corrcoef(first_loop, second_loop)[0, 1]
+        if not np.isnan(corr):
+            return float(np.clip(corr, 0.0, 1.0))
+    except (RuntimeWarning, np.linalg.LinAlgError):
+        pass  # Fall through to spectral method
+    
+    # Method 2: Spectral similarity (robust fallback for NaN cases)
+    # This works even when np.corrcoef fails
+    eps = 1e-10
+    
+    # Compute FFT-based spectra
+    spectrum1 = np.abs(np.fft.rfft(first_loop))
+    spectrum2 = np.abs(np.fft.rfft(second_loop))
+    
+    # Avoid log(0)
+    spectrum1 = np.clip(spectrum1, eps, None)
+    spectrum2 = np.clip(spectrum2, eps, None)
+    
+    # Use log spectra for scale-invariant comparison
+    log_spec1 = np.log(spectrum1)
+    log_spec2 = np.log(spectrum2)
+    
+    # Pad to same length
+    min_spec_len = min(len(log_spec1), len(log_spec2))
+    log_spec1 = log_spec1[:min_spec_len]
+    log_spec2 = log_spec2[:min_spec_len]
+    
+    # Compute spectral distance
+    spec_distance = np.sqrt(np.mean((log_spec1 - log_spec2) ** 2))
+    
+    # Convert distance to similarity (lower distance = higher stability)
+    # Use exponential decay: stability = exp(-distance/tau)
+    tau = 1.0  # Time constant (empirically tuned)
+    stability = float(np.exp(-spec_distance / tau))
+    
+    # Clip to valid range [0, 1]
+    return float(np.clip(stability, 0.0, 1.0))
+
+
+def _compute_loop_stability_fft(
+    audio: np.ndarray, loop_samples: int, sr: int = 44100
+) -> float:
+    """
+    Compute loop stability using FFT-based spectral comparison.
+    
+    ISSUE #2 FIX: Replaces broken np.corrcoef() method
+    
+    More robust than time-domain correlation for short signals.
+    Compares the frequency-domain magnitude spectra of two consecutive
+    loop periods using cosine similarity.
+    
+    Args:
+        audio: Audio samples for the section
+        loop_samples: Length of one loop period in samples
+        sr: Sample rate (unused, kept for interface compatibility)
+    
+    Returns:
+        Stability score 0.0-1.0
+    """
+    if loop_samples >= len(audio):
+        return 0.3  # Too short
+    
+    try:
+        # Extract two consecutive loop periods
+        first_loop = audio[:loop_samples]
+        second_start = loop_samples
+        second_end = min(second_start + loop_samples, len(audio))
+        second_loop = audio[second_start:second_end]
+        
+        # Ensure same length (pad or truncate)
+        min_len = min(len(first_loop), len(second_loop))
+        if min_len < 100:  # Too short for FFT analysis
+            return 0.3
+        
+        first = first_loop[:min_len]
+        second = second_loop[:min_len]
+        
+        # Compute FFT magnitude (frequency domain)
+        # Use n=2048 for consistent frequency resolution
+        fft1 = np.abs(np.fft.rfft(first, n=2048))
+        fft2 = np.abs(np.fft.rfft(second, n=2048))
+        
+        # Pad to same length
+        max_len = max(len(fft1), len(fft2))
+        fft1 = np.pad(fft1, (0, max_len - len(fft1)))
+        fft2 = np.pad(fft2, (0, max_len - len(fft2)))
+        
+        # Cosine similarity in frequency domain
+        # This compares spectral shape, not exact magnitude
+        norm1 = np.linalg.norm(fft1)
+        norm2 = np.linalg.norm(fft2)
+        
+        if norm1 < 1e-10 or norm2 < 1e-10:
+            return 0.3  # Silent or too quiet
+        
+        stability = np.dot(fft1, fft2) / (norm1 * norm2)
+        
+        # Clip to 0.0-1.0
+        stability = float(np.clip(stability, 0.0, 1.0))
+        
+        # Add some floor (even imperfect loops are worth 0.2+)
+        stability = max(0.2, stability)
+        
+        return round(stability, 4)
+        
+    except Exception as e:
+        logger.warning(f"Loop stability FFT computation failed: {e}")
+        return 0.3
+
+
 def detect_loop_regions(
     sections: List[Section], audio: np.ndarray, sr: int, bpm: float,
 ) -> List[LoopRegion]:
@@ -939,16 +1083,10 @@ def detect_loop_regions(
             second_end = min(second_start + loop_samples, len(section_audio))
             second_loop = section_audio[second_start:second_end]
 
-            # Pad to same length
-            min_len = min(len(first_loop), len(second_loop))
-            if min_len > 0:
-                corr = np.corrcoef(
-                    first_loop[:min_len],
-                    second_loop[:min_len],
-                )[0, 1]
-                stability = max(0.0, float(corr)) if not np.isnan(corr) else 0.3
-            else:
-                stability = 0.3
+            # FIXED: Use robust spectral method instead of np.corrcoef
+            # np.corrcoef returns NaN for constant/high-energy signals
+            # _compute_loop_stability handles these edge cases gracefully
+            stability = _compute_loop_stability(first_loop, second_loop)
 
         loops.append(LoopRegion(
             start_seconds=round(sec.start_seconds, 3),
@@ -1019,6 +1157,177 @@ def detect_vocal(audio: np.ndarray, sr: int) -> bool:
     return avg_flatness < 0.15
 
 
+def detect_vocal_regions(
+    audio: np.ndarray, sr: int = 44100
+) -> list:
+    """Detect time ranges where vocal content is present.
+
+    Uses bandpass filtering (300Hz-4kHz) and RMS energy thresholding
+    to find contiguous vocal regions. Returns list of (start_sec, end_sec) tuples.
+
+    Algorithm:
+    1. Bandpass filter audio to vocal range (300-4000 Hz)
+    2. Compute RMS energy per frame (512 sample hop)
+    3. Calculate adaptive threshold (mean + 0.5*std)
+    4. Find contiguous regions above threshold
+    5. Return as seconds timestamps
+
+    Args:
+        audio: Audio signal (mono, float32)
+        sr: Sample rate (default 44100)
+
+    Returns:
+        List of (start_seconds, end_seconds) tuples for vocal regions
+        Empty list if no vocals detected
+    """
+    if len(audio) < 2048:
+        return []
+
+    # Bandpass filter 300Hz-4kHz (vocal fundamental + harmonics)
+    nyquist = sr / 2.0
+    low = 300.0 / nyquist
+    high = min(4000.0 / nyquist, 0.999)
+
+    if low >= high:
+        return []
+
+    try:
+        sos = signal.butter(4, [low, high], btype='band', output='sos')
+        vocal_band = signal.sosfilt(sos, audio)
+    except Exception as e:
+        logger.warning(f"Vocal bandpass filter failed: {e}")
+        return []
+
+    # Compute RMS energy per frame
+    hop_length = 512
+    n_frames = (len(vocal_band) - hop_length) // hop_length + 1
+
+    rms_energy = np.zeros(n_frames)
+    for i in range(n_frames):
+        start = i * hop_length
+        end = start + hop_length
+        if end > len(vocal_band):
+            end = len(vocal_band)
+        frame = vocal_band[start:end]
+        rms_energy[i] = np.sqrt(np.mean(frame ** 2))
+
+    # Adaptive thresholding: mean + 0.5*std
+    rms_mean = np.mean(rms_energy)
+    rms_std = np.std(rms_energy)
+    threshold = rms_mean + 0.5 * rms_std
+
+    # Minimum vocal region: 0.5 seconds (prevent noise spikes)
+    min_region_frames = int(0.5 * sr / hop_length)
+
+    # Find contiguous vocal regions
+    vocal_mask = rms_energy > threshold
+
+    regions = []
+    start_frame = None
+
+    for i, is_vocal in enumerate(vocal_mask):
+        if is_vocal and start_frame is None:
+            # Start of potential vocal region
+            start_frame = i
+        elif not is_vocal and start_frame is not None:
+            # End of vocal region
+            region_length = i - start_frame
+            if region_length >= min_region_frames:
+                # Valid region - convert frames to seconds
+                start_sec = start_frame * hop_length / sr
+                end_sec = i * hop_length / sr
+                regions.append((start_sec, end_sec))
+            start_frame = None
+
+    # Handle region at end of audio
+    if start_frame is not None:
+        region_length = len(vocal_mask) - start_frame
+        if region_length >= min_region_frames:
+            start_sec = start_frame * hop_length / sr
+            end_sec = len(audio) / sr
+            regions.append((start_sec, end_sec))
+
+    logger.debug(f"Detected {len(regions)} vocal regions: {regions}")
+    return regions
+
+
+def compute_loop_vocal_prominence(
+    loop: LoopRegion, vocal_regions: list
+) -> float:
+    """Calculate what percentage of a loop contains vocal content.
+
+    Compares loop time range with vocal region time ranges.
+
+    Args:
+        loop: LoopRegion with start_seconds and end_seconds
+        vocal_regions: List of (start_sec, end_sec) tuples
+
+    Returns:
+        vocal_prominence: 0.0-1.0 (0=no vocals, 1.0=pure vocals)
+    """
+    if not vocal_regions:
+        return 0.0
+
+    loop_start = loop.start_seconds
+    loop_end = loop.end_seconds
+    loop_duration = loop_end - loop_start
+
+    if loop_duration <= 0:
+        return 0.0
+
+    # Calculate total overlap between loop and vocal regions
+    vocal_overlap = 0.0
+    for v_start, v_end in vocal_regions:
+        # Find intersection of [loop_start, loop_end] and [v_start, v_end]
+        overlap_start = max(loop_start, v_start)
+        overlap_end = min(loop_end, v_end)
+
+        if overlap_end > overlap_start:
+            vocal_overlap += overlap_end - overlap_start
+
+    # Proportion of loop that's vocal
+    vocal_prominence = vocal_overlap / loop_duration
+
+    # Clip to 0.0-1.0 range
+    return float(np.clip(vocal_prominence, 0.0, 1.0))
+
+
+def detect_key_compatibility(key1: str, key2: str) -> bool:
+    """Check if two keys are harmonically compatible for mixing.
+
+    Uses circle of fifths: compatible if within 2 steps.
+
+    Args:
+        key1: Key string (e.g., "C", "Am", "G", "F#m")
+        key2: Key string
+
+    Returns:
+        True if keys are compatible
+    """
+    if not key1 or not key2:
+        return True  # Unknown keys assumed compatible
+
+    # Extract base note (first character)
+    base1 = key1[0].upper() if key1 else "C"
+    base2 = key2[0].upper() if key2 else "C"
+
+    # Pitch class circle: C, G, D, A, E, B, F#, C#, G#, D#, A#, F
+    pitch_classes = ["C", "G", "D", "A", "E", "B", "F#", "C#", "G#", "D#", "A#", "F"]
+
+    try:
+        idx1 = pitch_classes.index(base1)
+        idx2 = pitch_classes.index(base2)
+    except (ValueError, IndexError):
+        return True  # Unknown keys assumed compatible
+
+    # Calculate distance on circle of fifths
+    distance = min(abs(idx1 - idx2), 12 - abs(idx1 - idx2))
+
+    # Compatible if within 3 steps on circle of fifths
+    # (C compatible with G, D, A, E, F, B, etc.)
+    return distance <= 3
+
+
 def analyze_track_structure(
     audio: np.ndarray, sr: int, bpm: float,
 ) -> TrackStructure:
@@ -1066,7 +1375,17 @@ def analyze_track_structure(
     # 7. Detect vocals (sample only, to save memory)
     has_vocal = bool(detect_vocal(audio, sr))
 
-    # 8. Compute total bars
+    # 8. Detect vocal regions (find WHERE vocals occur)
+    vocal_regions = detect_vocal_regions(audio, sr) if has_vocal else []
+    logger.debug(f"Detected {len(vocal_regions)} vocal regions: {vocal_regions}")
+
+    # 9. Compute vocal prominence for each loop (Phase 2 enhancement)
+    if vocal_regions:
+        for loop in loop_regions:
+            loop.vocal_prominence = compute_loop_vocal_prominence(loop, vocal_regions)
+        logger.debug(f"Computed vocal prominence for {len(loop_regions)} loops")
+
+    # 10. Compute total bars
     total_bars = 0
     if bpm > 0:
         seconds_per_bar = 4 * 60.0 / bpm
@@ -1081,11 +1400,13 @@ def analyze_track_structure(
         total_bars=total_bars,
         kick_pattern=kick_pattern,
         has_vocal=has_vocal,
+        vocal_regions=vocal_regions,
     )
 
     logger.info(
         f"Structure complete: {len(sections)} sections, "
         f"{len(cue_points)} cues, {len(loop_regions)} loops, "
+        f"{len(vocal_regions)} vocal regions, "
         f"kick={kick_pattern}, vocal={has_vocal}"
     )
 

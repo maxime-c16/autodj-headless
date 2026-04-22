@@ -1,0 +1,92 @@
+[
+  {
+    "id": "never_enough_01",
+    "album": "Never Enough - EP",
+    "artist": "BSLS",
+    "title": "Never Enough (Intro)",
+    "bpm": 120,
+    "duration_seconds": 180,
+    "key": "9A",
+    "bass_energy": 0.3,
+    "kick_strength": 0.35,
+    "outro_start_seconds": 160,
+    "spectral_data": {
+      "mids_energy": 0.59,
+      "highs_energy": 0.47000000000000003,
+      "freq_centroid": 2300.0,
+      "rms_loudness": -6.9
+    }
+  },
+  {
+    "id": "never_enough_02",
+    "album": "Never Enough - EP",
+    "artist": "BSLS",
+    "title": "Rising Up",
+    "bpm": 124,
+    "duration_seconds": 280,
+    "key": "9A",
+    "bass_energy": 0.7,
+    "kick_strength": 0.8,
+    "outro_start_seconds": 250,
+    "spectral_data": {
+      "mids_energy": 0.71,
+      "highs_energy": 0.56,
+      "freq_centroid": 2700.0,
+      "rms_loudness": -8.1
+    }
+  },
+  {
+    "id": "never_enough_03",
+    "album": "Never Enough - EP",
+    "artist": "BSLS",
+    "title": "Peak Moment",
+    "bpm": 126,
+    "duration_seconds": 300,
+    "key": "11A",
+    "bass_energy": 0.88,
+    "kick_strength": 0.92,
+    "outro_start_seconds": 270,
+    "spectral_data": {
+      "mids_energy": 0.764,
+      "highs_energy": 0.5840000000000001,
+      "freq_centroid": 2880.0,
+      "rms_loudness": -8.64
+    }
+  },
+  {
+    "id": "never_enough_04",
+    "album": "Never Enough - EP",
+    "artist": "BSLS",
+    "title": "Reflection",
+    "bpm": 122,
+    "duration_seconds": 240,
+    "key": "6A",
+    "bass_energy": 0.25,
+    "kick_strength": 0.2,
+    "outro_start_seconds": 210,
+    "spectral_data": {
+      "mids_energy": 0.575,
+      "highs_energy": 0.44000000000000006,
+      "freq_centroid": 2250.0,
+      "rms_loudness": -6.75
+    }
+  },
+  {
+    "id": "never_enough_05",
+    "album": "Never Enough - EP",
+    "artist": "BSLS",
+    "title": "Final Surge",
+    "bpm": 128,
+    "duration_seconds": 260,
+    "key": "9A",
+    "bass_energy": 0.85,
+    "kick_strength": 0.88,
+    "outro_start_seconds": 240,
+    "spectral_data": {
+      "mids_energy": 0.755,
+      "highs_energy": 0.5760000000000001,
+      "freq_centroid": 2850.0,
+      "rms_loudness": -8.55
+    }
+  }
+]

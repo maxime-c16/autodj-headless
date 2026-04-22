@@ -1,0 +1,99 @@
+{
+  "album": "Never Enough",
+  "timestamp": "2026-02-23T14:34:05.132995",
+  "status": "success",
+  "tracks_processed": 5,
+  "transitions_processed": 4,
+  "phases_applied": {
+    "phase1": {
+      "count": 4,
+      "total": 4,
+      "coverage": "100%",
+      "details": [
+        {
+          "transition": 1,
+          "start_seconds": 152.13114754098362,
+          "duration_seconds": 7.868852459016381
+        },
+        {
+          "transition": 2,
+          "start_seconds": 242.32,
+          "duration_seconds": 7.680000000000007
+        },
+        {
+          "transition": 3,
+          "start_seconds": 262.258064516129,
+          "duration_seconds": 7.741935483870975
+        },
+        {
+          "transition": 4,
+          "start_seconds": 202.32,
+          "duration_seconds": 7.680000000000007
+        }
+      ]
+    },
+    "phase2": {
+      "count": 4,
+      "total": 4,
+      "coverage": "100%",
+      "average_intensity": 0.701,
+      "details": [
+        {
+          "transition": 1,
+          "hpf_frequency": 200.0,
+          "intensity": 0.71
+        },
+        {
+          "transition": 2,
+          "hpf_frequency": 200.0,
+          "intensity": 0.764
+        },
+        {
+          "transition": 3,
+          "hpf_frequency": 200.0,
+          "intensity": 0.575
+        },
+        {
+          "transition": 4,
+          "hpf_frequency": 200.0,
+          "intensity": 0.755
+        }
+      ]
+    },
+    "phase4": {
+      "gradual": 3,
+      "instant": 1,
+      "coverage": "100%",
+      "details": [
+        {
+          "transition": 1,
+          "strategy": "gradual",
+          "timing_variation": 0.658913015196092
+        },
+        {
+          "transition": 2,
+          "strategy": "instant",
+          "timing_variation": -0.36027822983524466
+        },
+        {
+          "transition": 3,
+          "strategy": "gradual",
+          "timing_variation": 2.0
+        },
+        {
+          "transition": 4,
+          "strategy": "gradual",
+          "timing_variation": -0.17684927605893314
+        }
+      ]
+    }
+  },
+  "listening_guide": {
+    "phase1_location": "Last 30 seconds of each track (OUTRO section)",
+    "phase1_what_to_hear": "Incoming track fading in 7-8 seconds before outro ends",
+    "phase2_location": "At exact transition point (where tracks meet)",
+    "phase2_what_to_hear": "Clean bass entry, no muddy overlap",
+    "phase4_location": "Across multiple transitions",
+    "phase4_what_to_hear": "Mix of smooth (gradual) and snappy (instant) transitions"
+  }
+}

@@ -1,0 +1,146 @@
+[
+  {
+    "id": "rusty_chains_01",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Intro - Rust & Chains",
+    "bpm": 124,
+    "duration_seconds": 240,
+    "key": "8A",
+    "bass_energy": 0.35,
+    "kick_strength": 0.4,
+    "outro_start_seconds": 220,
+    "spectral_data": {
+      "mids_energy": 0.605,
+      "highs_energy": 0.48000000000000004,
+      "freq_centroid": 2350.0,
+      "rms_loudness": -7.05
+    }
+  },
+  {
+    "id": "rusty_chains_02",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Building Momentum",
+    "bpm": 128,
+    "duration_seconds": 300,
+    "key": "8A",
+    "bass_energy": 0.65,
+    "kick_strength": 0.75,
+    "outro_start_seconds": 270,
+    "spectral_data": {
+      "mids_energy": 0.6950000000000001,
+      "highs_energy": 0.55,
+      "freq_centroid": 2650.0,
+      "rms_loudness": -7.95
+    }
+  },
+  {
+    "id": "rusty_chains_03",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Deep Drop",
+    "bpm": 126,
+    "duration_seconds": 320,
+    "key": "10A",
+    "bass_energy": 0.85,
+    "kick_strength": 0.9,
+    "outro_start_seconds": 285,
+    "spectral_data": {
+      "mids_energy": 0.755,
+      "highs_energy": 0.5800000000000001,
+      "freq_centroid": 2850.0,
+      "rms_loudness": -8.55
+    }
+  },
+  {
+    "id": "rusty_chains_04",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Ethereal Breakdown",
+    "bpm": 128,
+    "duration_seconds": 280,
+    "key": "1A",
+    "bass_energy": 0.2,
+    "kick_strength": 0.1,
+    "outro_start_seconds": 250,
+    "spectral_data": {
+      "mids_energy": 0.56,
+      "highs_energy": 0.42000000000000004,
+      "freq_centroid": 2200.0,
+      "rms_loudness": -6.6
+    }
+  },
+  {
+    "id": "rusty_chains_05",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Peak Energy Return",
+    "bpm": 130,
+    "duration_seconds": 300,
+    "key": "8A",
+    "bass_energy": 0.8,
+    "kick_strength": 0.85,
+    "outro_start_seconds": 270,
+    "spectral_data": {
+      "mids_energy": 0.74,
+      "highs_energy": 0.5700000000000001,
+      "freq_centroid": 2800.0,
+      "rms_loudness": -8.4
+    }
+  },
+  {
+    "id": "rusty_chains_06",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Harmonic Build",
+    "bpm": 126,
+    "duration_seconds": 310,
+    "key": "10A",
+    "bass_energy": 0.75,
+    "kick_strength": 0.8,
+    "outro_start_seconds": 280,
+    "spectral_data": {
+      "mids_energy": 0.725,
+      "highs_energy": 0.56,
+      "freq_centroid": 2750.0,
+      "rms_loudness": -8.25
+    }
+  },
+  {
+    "id": "rusty_chains_07",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Climax",
+    "bpm": 132,
+    "duration_seconds": 330,
+    "key": "8A",
+    "bass_energy": 0.9,
+    "kick_strength": 0.95,
+    "outro_start_seconds": 300,
+    "spectral_data": {
+      "mids_energy": 0.77,
+      "highs_energy": 0.5900000000000001,
+      "freq_centroid": 2900.0,
+      "rms_loudness": -8.7
+    }
+  },
+  {
+    "id": "rusty_chains_08",
+    "album": "Rusty Chains",
+    "artist": "\u00d8rgie",
+    "title": "Final Descent",
+    "bpm": 124,
+    "duration_seconds": 240,
+    "key": "8A",
+    "bass_energy": 0.4,
+    "kick_strength": 0.5,
+    "outro_start_seconds": 210,
+    "spectral_data": {
+      "mids_energy": 0.62,
+      "highs_energy": 0.5,
+      "freq_centroid": 2400.0,
+      "rms_loudness": -7.2
+    }
+  }
+]

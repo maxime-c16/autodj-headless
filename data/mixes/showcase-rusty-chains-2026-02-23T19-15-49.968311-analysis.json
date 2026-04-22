@@ -1,0 +1,83 @@
+{
+  "album": "Rusty Chains by \u00d8RGIE",
+  "sections": [
+    {
+      "track": 1,
+      "name": "Opening",
+      "duration_minutes": 3.5,
+      "bars": 112,
+      "energy": "build",
+      "techniques": 4,
+      "engagement": "14.3%",
+      "safety_status": "safe"
+    },
+    {
+      "track": 2,
+      "name": "Main Theme",
+      "duration_minutes": 3.2,
+      "bars": 102,
+      "energy": "peak",
+      "techniques": 3,
+      "engagement": "11.7%",
+      "safety_status": "safe"
+    },
+    {
+      "track": 3,
+      "name": "Breakdown",
+      "duration_minutes": 2.8,
+      "bars": 90,
+      "energy": "breakdown",
+      "techniques": 2,
+      "engagement": "8.9%",
+      "safety_status": "safe"
+    },
+    {
+      "track": 4,
+      "name": "Build Up",
+      "duration_minutes": 3.1,
+      "bars": 99,
+      "energy": "build",
+      "techniques": 4,
+      "engagement": "16.1%",
+      "safety_status": "safe"
+    },
+    {
+      "track": 5,
+      "name": "Peak Drop",
+      "duration_minutes": 3.8,
+      "bars": 122,
+      "energy": "peak",
+      "techniques": 3,
+      "engagement": "9.9%",
+      "safety_status": "safe"
+    },
+    {
+      "track": 6,
+      "name": "Extended Mix",
+      "duration_minutes": 3.6,
+      "bars": 115,
+      "energy": "peak",
+      "techniques": 3,
+      "engagement": "10.4%",
+      "safety_status": "safe"
+    },
+    {
+      "track": 7,
+      "name": "Outro",
+      "duration_minutes": 2.0,
+      "bars": 64,
+      "energy": "fade",
+      "techniques": 2,
+      "engagement": "12.5%",
+      "safety_status": "safe"
+    }
+  ],
+  "total_sections": 7,
+  "total_techniques": 21,
+  "total_glitch_issues_detected": 21,
+  "total_glitch_issues_mitigated": 21,
+  "glitch_mitigation_rate": "100%",
+  "code_lines_generated": 403,
+  "rendering_status": "prepared",
+  "next_step": "Execute render via render.py"
+}

@@ -1,0 +1,469 @@
+{
+  "test_date": "2026-02-23T10:41:34.056083",
+  "total_tracks": 15,
+  "summary": {
+    "total_tracks_tested": 15,
+    "octave_error_rate": {
+      "config_a_percent": 0.0,
+      "config_b_percent": 6.666666666666667,
+      "improvement_percent": -6.666666666666667,
+      "target_achieved": false
+    },
+    "bpm_confidence": {
+      "config_a_high_conf_percent": 66.66666666666666,
+      "config_b_high_conf_percent": 80.0,
+      "improvement_percent": 13.333333333333343,
+      "target_achieved": false
+    },
+    "grid_fitness_b": {
+      "high_count": 7,
+      "medium_count": 7,
+      "low_count": 1,
+      "coverage_percent": 93.33333333333333,
+      "target_achieved": false
+    },
+    "render_time": {
+      "config_a_avg_ms": 0.00762939453125,
+      "config_b_avg_ms": 0.024239222208658855,
+      "change_percent": 217.70833333333334,
+      "target_achieved": false
+    }
+  },
+  "results": [
+    {
+      "track_id": "EDM_001",
+      "config_a": {
+        "render_time_ms": 0.024080276489257812,
+        "bpm_confidence": 0.8921737803827386,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.045299530029296875,
+        "bpm_confidence": 0.7416344514749814,
+        "octave_error": false,
+        "grid_fitness": 0.7973825815499211,
+        "grid_fitness_class": "MEDIUM"
+      },
+      "improvements": {
+        "confidence_improvement": -0.15053932890775723,
+        "fitness_improvement": 0.7973825815499211,
+        "render_time_change_percent": 88.11881188118812,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": false,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "EDM_002",
+      "config_a": {
+        "render_time_ms": 0.00667572021484375,
+        "bpm_confidence": 0.8542726841453387,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.032901763916015625,
+        "bpm_confidence": 0.6409156194585508,
+        "octave_error": true,
+        "grid_fitness": 0.9785596232736573,
+        "grid_fitness_class": "HIGH"
+      },
+      "improvements": {
+        "confidence_improvement": -0.21335706468678795,
+        "fitness_improvement": 0.9785596232736573,
+        "render_time_change_percent": 392.85714285714283,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": false,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": false,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "EDM_003",
+      "config_a": {
+        "render_time_ms": 0.008106231689453125,
+        "bpm_confidence": 0.7843445111324058,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.02574920654296875,
+        "bpm_confidence": 0.793981186312177,
+        "octave_error": false,
+        "grid_fitness": 0.7120684992394521,
+        "grid_fitness_class": "MEDIUM"
+      },
+      "improvements": {
+        "confidence_improvement": 0.009636675179771181,
+        "fitness_improvement": 0.7120684992394521,
+        "render_time_change_percent": 217.6470588235294,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": false,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "HOUSE_001",
+      "config_a": {
+        "render_time_ms": 0.005245208740234375,
+        "bpm_confidence": 0.8468601408966943,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.023126602172851562,
+        "bpm_confidence": 1.0,
+        "octave_error": false,
+        "grid_fitness": 0.9833355799078656,
+        "grid_fitness_class": "HIGH"
+      },
+      "improvements": {
+        "confidence_improvement": 0.15313985910330574,
+        "fitness_improvement": 0.9833355799078656,
+        "render_time_change_percent": 340.90909090909093,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "HOUSE_002",
+      "config_a": {
+        "render_time_ms": 0.00762939453125,
+        "bpm_confidence": 0.7262057408129087,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.02288818359375,
+        "bpm_confidence": 0.700640276185346,
+        "octave_error": false,
+        "grid_fitness": 0.7138698570091934,
+        "grid_fitness_class": "MEDIUM"
+      },
+      "improvements": {
+        "confidence_improvement": -0.025565464627562706,
+        "fitness_improvement": 0.7138698570091934,
+        "render_time_change_percent": 200.0,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": false,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "HOUSE_003",
+      "config_a": {
+        "render_time_ms": 0.00476837158203125,
+        "bpm_confidence": 0.8982739303071363,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.021219253540039062,
+        "bpm_confidence": 0.9137721348355435,
+        "octave_error": false,
+        "grid_fitness": 0.8329387182854372,
+        "grid_fitness_class": "HIGH"
+      },
+      "improvements": {
+        "confidence_improvement": 0.015498204528407222,
+        "fitness_improvement": 0.8329387182854372,
+        "render_time_change_percent": 345.0,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": false,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "TECHNO_001",
+      "config_a": {
+        "render_time_ms": 0.007867813110351562,
+        "bpm_confidence": 0.8735541074853737,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.020742416381835938,
+        "bpm_confidence": 0.9659564859221808,
+        "octave_error": false,
+        "grid_fitness": 0.9863446719344335,
+        "grid_fitness_class": "HIGH"
+      },
+      "improvements": {
+        "confidence_improvement": 0.0924023784368071,
+        "fitness_improvement": 0.9863446719344335,
+        "render_time_change_percent": 163.63636363636365,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "TECHNO_002",
+      "config_a": {
+        "render_time_ms": 0.008821487426757812,
+        "bpm_confidence": 0.5010535388873959,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.03147125244140625,
+        "bpm_confidence": 0.7944996241682953,
+        "octave_error": false,
+        "grid_fitness": 0.8958064624471442,
+        "grid_fitness_class": "HIGH"
+      },
+      "improvements": {
+        "confidence_improvement": 0.29344608528089944,
+        "fitness_improvement": 0.8958064624471442,
+        "render_time_change_percent": 256.7567567567568,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "TECHNO_003",
+      "config_a": {
+        "render_time_ms": 0.008106231689453125,
+        "bpm_confidence": 0.8109655064393535,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.0209808349609375,
+        "bpm_confidence": 0.9288196382716744,
+        "octave_error": false,
+        "grid_fitness": 1.0,
+        "grid_fitness_class": "HIGH"
+      },
+      "improvements": {
+        "confidence_improvement": 0.11785413183232085,
+        "fitness_improvement": 1.0,
+        "render_time_change_percent": 158.8235294117647,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "HIPHOP_001",
+      "config_a": {
+        "render_time_ms": 0.0045299530029296875,
+        "bpm_confidence": 0.7991137439563805,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.020265579223632812,
+        "bpm_confidence": 1.0,
+        "octave_error": false,
+        "grid_fitness": 0.8310227719832913,
+        "grid_fitness_class": "HIGH"
+      },
+      "improvements": {
+        "confidence_improvement": 0.20088625604361954,
+        "fitness_improvement": 0.8310227719832913,
+        "render_time_change_percent": 347.3684210526316,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "HIPHOP_002",
+      "config_a": {
+        "render_time_ms": 0.00667572021484375,
+        "bpm_confidence": 0.7914431964855005,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.020265579223632812,
+        "bpm_confidence": 0.8878492531063917,
+        "octave_error": false,
+        "grid_fitness": 0.6656418588200875,
+        "grid_fitness_class": "MEDIUM"
+      },
+      "improvements": {
+        "confidence_improvement": 0.09640605662089119,
+        "fitness_improvement": 0.6656418588200875,
+        "render_time_change_percent": 203.57142857142856,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "FUNK_001",
+      "config_a": {
+        "render_time_ms": 0.0045299530029296875,
+        "bpm_confidence": 0.6786487605153113,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.019788742065429688,
+        "bpm_confidence": 0.7070923019983131,
+        "octave_error": false,
+        "grid_fitness": 0.6300576030215018,
+        "grid_fitness_class": "MEDIUM"
+      },
+      "improvements": {
+        "confidence_improvement": 0.028443541483001766,
+        "fitness_improvement": 0.6300576030215018,
+        "render_time_change_percent": 336.84210526315786,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": false,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "EDGE_LOW",
+      "config_a": {
+        "render_time_ms": 0.0069141387939453125,
+        "bpm_confidence": 0.3577654816386813,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.020503997802734375,
+        "bpm_confidence": 0.5395062111251222,
+        "octave_error": false,
+        "grid_fitness": 0.6976464139847621,
+        "grid_fitness_class": "MEDIUM"
+      },
+      "improvements": {
+        "confidence_improvement": 0.18174072948644088,
+        "fitness_improvement": 0.6976464139847621,
+        "render_time_change_percent": 196.55172413793102,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "EDGE_HIGH",
+      "config_a": {
+        "render_time_ms": 0.004291534423828125,
+        "bpm_confidence": 0.42580268531809906,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.019311904907226562,
+        "bpm_confidence": 0.3316051467932868,
+        "octave_error": false,
+        "grid_fitness": 0.4701842903690027,
+        "grid_fitness_class": "LOW"
+      },
+      "improvements": {
+        "confidence_improvement": -0.09419753852481227,
+        "fitness_improvement": 0.4701842903690027,
+        "render_time_change_percent": 350.0,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": false,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    },
+    {
+      "track_id": "EDGE_VOCAL",
+      "config_a": {
+        "render_time_ms": 0.006198883056640625,
+        "bpm_confidence": 0.4298777654719837,
+        "octave_error": false,
+        "grid_fitness": 0.0
+      },
+      "config_b": {
+        "render_time_ms": 0.019073486328125,
+        "bpm_confidence": 0.8208489501441181,
+        "octave_error": false,
+        "grid_fitness": 0.612942892116648,
+        "grid_fitness_class": "MEDIUM"
+      },
+      "improvements": {
+        "confidence_improvement": 0.3909711846721344,
+        "fitness_improvement": 0.612942892116648,
+        "render_time_change_percent": 207.6923076923077,
+        "octave_error_fixed": 0.0
+      },
+      "pass_fail": {
+        "confidence_improved": true,
+        "fitness_improved": true,
+        "render_time_acceptable": false,
+        "octave_error_reduced": true,
+        "processing_successful": true
+      }
+    }
+  ]
+}

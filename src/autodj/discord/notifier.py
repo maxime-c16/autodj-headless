@@ -179,11 +179,23 @@ class DiscordNotifier:
     
     def post_complete(self, mix_info: Dict[str, Any]) -> None:
         """Post message when entire pipeline completes"""
+        # Ensure all values are strings and remove any template variables
+        fields = {}
+        for key, value in mix_info.items():
+            str_value = str(value).strip()
+            # Skip template variables
+            if str_value.startswith('${') or str_value.endswith('}'):
+                continue
+            # Skip None or empty values
+            if not str_value or str_value.lower() in ('none', '0.0 mb', 'unknown'):
+                continue
+            fields[key] = str_value
+        
         self._send_embed(
             title="✅ AutoDJ Pipeline Complete!",
             description="Mix is ready for broadcast",
             color=0x00ff00,  # Green
-            fields=mix_info
+            fields=fields if fields else {"Status": "Ready for broadcast"}
         )
     
     def post_error(self, phase: str, error_msg: str, log_path: Optional[str] = None) -> None:

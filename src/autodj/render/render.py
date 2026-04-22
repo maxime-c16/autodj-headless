@@ -747,20 +747,27 @@ def render(
         )
 
         # 🎛️ NEW: Pre-process tracks with EQ before Liquidsoap mixing
-        if eq_enabled:
-            logger.info("🎛️ Running EQ pre-processing on tracks...")
+        # DISABLED: Preprocessing causes scipy out-of-memory errors
+        # SOLUTION: Use Liquidsoap-native filter blending instead
+        if False and eq_enabled:  # Disabled for now
+            logger.info("🎛️ EQ pre-processing DISABLED (using Liquidsoap native filters instead)...")
+            logger.info(f"   EQ enabled: {eq_enabled}")
+            logger.info(f"   Transitions JSON: {transitions_json_path}")
             try:
                 from autodj.render.eq_preprocessor import preprocess_transitions
                 temp_eq_dir = Path("/tmp/autodj_eq_processed")
+                logger.info(f"   Output dir: {temp_eq_dir}")
                 success = preprocess_transitions(transitions_json_path, temp_eq_dir, eq_enabled=True)
                 if success:
                     logger.info(f"✅ EQ pre-processing complete, using processed tracks")
                 else:
                     logger.warning(f"⚠️ EQ pre-processing failed, continuing with original tracks")
-            except ImportError:
-                logger.warning("⚠️ EQ preprocessor not available, skipping")
+            except ImportError as e:
+                logger.warning(f"⚠️ EQ preprocessor not available: {e}, skipping")
             except Exception as e:
                 logger.warning(f"⚠️ EQ pre-processing error: {e}")
+                import traceback
+                traceback.print_exc()
         
         # 🎵 PHASE 1: Apply early transitions
         if phase1_enabled:
@@ -1352,12 +1359,67 @@ def _calculate_stretch_ratio(
     return ratio
 
 
+def _extract_m4a_segment(
+    file_path: str, cue_in: float, cue_out: float, temp_dir: str, label: str = "seg"
+) -> Optional[str]:
+    """Pre-extract audio segment to WAV using ffmpeg for reliable Liquidsoap playback.
+
+    In Liquidsoap 2.1.3, cue_cut() on m4a/ALAC streams calls seek() internally.
+    For late cue_in positions (>~60s), the seek fails: "Seeked to 0.080 instead of 229.060".
+    This causes zero-duration output and cascades to break adjacent add() sources.
+
+    Pre-extracting to WAV bypasses the issue: ffmpeg uses -ss for accurate seeking,
+    and the resulting WAV starts at position 0 (no Liquidsoap seeking required).
+
+    Args:
+        file_path: Path to source m4a/ALAC file
+        cue_in: Start position in seconds
+        cue_out: End position in seconds
+        temp_dir: Directory for temp WAV files
+        label: Label prefix for WAV filename (for debugging)
+
+    Returns:
+        Path to extracted WAV file, or None on failure
+    """
+    import hashlib
+    key = f"{file_path}:{cue_in:.6f}:{cue_out:.6f}"
+    h = hashlib.md5(key.encode()).hexdigest()[:8]
+    out_path = str(Path(temp_dir) / f"{label}_{h}.wav")
+
+    # Return cached file if already extracted
+    if Path(out_path).exists() and Path(out_path).stat().st_size > 1000:
+        return out_path
+
+    cmd = [
+        "ffmpeg", "-ss", str(cue_in), "-to", str(cue_out),
+        "-i", file_path,
+        "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+        out_path, "-y"
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
+        if result.returncode != 0 or not Path(out_path).exists() or Path(out_path).stat().st_size < 100:
+            logger.warning(f"Segment extraction failed ({cue_in:.1f}-{cue_out:.1f}s from {Path(file_path).name}): "
+                           f"{result.stderr.decode(errors='replace')[-200:]}")
+            return None
+        logger.debug(f"Extracted: {label} ({cue_in:.1f}-{cue_out:.1f}s) → {Path(out_path).name}")
+        return out_path
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Segment extraction timed out: {file_path}")
+        return None
+    except Exception as e:
+        logger.warning(f"Segment extraction error: {e}")
+        return None
+
+
 def _container_path(p: str) -> str:
     """Map host file paths to container paths for Liquidsoap script generation.
 
-    The NAS share /srv/nas/shared is mounted as /music inside the container.
+    autodj-dev container (26e6706aaf2d, Liq 2.1.3) mounts /srv/nas/shared at
+    the same path — no translation needed. The radio_liquidsoap container uses
+    /music/ but we never render there (it's a live radio service).
     """
-    return p.replace("/srv/nas/shared/", "/music/", 1) if p.startswith("/srv/nas/shared/") else p
+    return p
 
 
 def _generate_liquidsoap_script_legacy(
@@ -1411,16 +1473,19 @@ def _generate_liquidsoap_script_legacy(
     script.append("")
 
     # ==================== TRANSITION FUNCTION ====================
-    # NOTE: IIR filters cannot be instantiated inside cross() callbacks in Liquidsoap 2.x.
-    # The error is: "Early computation of source content-type detected for source iir_filter!"
-    # Filters must be applied to sources before they enter cross().
-    # The legacy pipeline uses a simple sine crossfade here; v2 pipeline handles filters via pre-processing.
-    script.append("# === DJ TRANSITION (sine crossfade) ===")
+    # filter.rc() WORKS inside cross() callbacks in Liquidsoap 2.1.3 (tested 2026-02-27).
+    # filter.iir.butterworth does NOT work (type error). filter.rc is the correct replacement.
+    # Classic DJ bass swap: cut bass on outgoing (HPF), warm start on incoming (LPF).
+    hpf_cutoff = 300.0   # Hz — remove kick/bass from outgoing track during transition
+    lpf_cutoff = 2500.0  # Hz — warm intro for incoming (opens up after crossfade)
+    script.append("# === DJ TRANSITION (bass swap crossfade) ===")
     script.append(f"def dj_transition(a, b) =")
-    script.append(f"  # cross() passes records with .source, .db_level, .metadata")
-    script.append(f"  # Note: IIR filters cannot be created inside cross() in Liquidsoap 2.x.")
-    script.append(f"  a_faded = fade.out(type=\"sin\", duration={xfade_duration:.1f}, a.source)")
-    script.append(f"  b_faded = fade.in(type=\"sin\", duration={xfade_duration:.1f}, b.source)")
+    script.append(f"  # Classic DJ technique: HPF outgoing (cuts bass), LPF incoming (warm entry)")
+    script.append(f"  # filter.rc() works in cross() callbacks in Liq 2.1.3 (butterworth does not)")
+    script.append(f"  a_cut = filter.rc(frequency={hpf_cutoff:.1f}, mode=\"high\", a.source)")
+    script.append(f"  a_faded = fade.out(type=\"sin\", duration={xfade_duration:.1f}, a_cut)")
+    script.append(f"  b_warm = filter.rc(frequency={lpf_cutoff:.1f}, mode=\"low\", b.source)")
+    script.append(f"  b_faded = fade.in(type=\"sin\", duration={xfade_duration:.1f}, b_warm)")
     script.append(f"  add(normalize=false, [a_faded, b_faded])")
     script.append("end")
     script.append("")
@@ -1483,6 +1548,10 @@ def _generate_liquidsoap_script_legacy(
         else:
             script.append(f'{track_var} = once(single("{file_path}"))')
 
+        # Decode ffmpeg.audio.raw (m4a/flac/etc) to PCM — required before stretch(), cross(), fade.*
+        # single() on container-decoded formats returns ffmpeg.audio.raw, not pcm
+        script.append(f"{track_var} = ffmpeg.raw.decode.audio({track_var})")
+
         # Apply time-stretching for BPM matching
         if stretch_ratio != 1.0:
             script.append(f"{track_var} = stretch(ratio={stretch_ratio:.3f}, {track_var})")
@@ -1500,32 +1569,13 @@ def _generate_liquidsoap_script_legacy(
         script.append("")
 
     # ==================== PHASE 5: MICRO-TECHNIQUES INJECTION ====================
-    # Inject Phase 5 micro-technique effects into transition zones
+    # NOTE: Phase 5 per-track effects are DISABLED in the legacy pipeline.
+    # The legacy pipeline cannot time-window effects to specific bars — applying HPF/LPF
+    # to an entire track kills the bass throughout (not just during transition zones).
+    # Phase 5 belongs in the v2 pipeline where body and transition segments are separate.
+    # DJ EQ techniques are provided via the dj_transition() bass swap above.
     if phase5_enabled and PHASE_5_INJECTION_AVAILABLE:
-        logger.info("🎵 Injecting Phase 5 micro-techniques into Liquidsoap script...")
-        
-        script.append("# === PHASE 5: MICRO-TECHNIQUES ===")
-        script.append("# Injected micro-techniques for professional DJ mixing")
-        script.append("")
-        
-        techniques_injected = 0
-        for idx, trans in enumerate(transitions):
-            techniques = trans.get('phase5_micro_techniques', [])
-            if techniques:
-                track_var = f"track_{idx}"
-                bpm = trans.get('bpm', 120.0)
-                
-                # Generate Phase 5 effect code for this track
-                effect_code = generate_phase5_track_effects(trans, track_var, bpm, idx)
-                if effect_code:
-                    script.append(effect_code)
-                    script.append("")
-                    techniques_injected += len(techniques)
-        
-        if techniques_injected > 0:
-            logger.info(f"✅ Injected {techniques_injected} micro-technique effects")
-        else:
-            logger.debug("⚠️ No Phase 5 techniques found to inject")
+        logger.debug("Phase 5 per-track injection skipped in legacy pipeline (use v2 for segment effects)")
     
     script.append("")
 
@@ -1544,9 +1594,10 @@ def _generate_liquidsoap_script_legacy(
 
     # ==================== MASTER PROCESSING ====================
     script.append("# === MASTER PROCESSING ===")
-    script.append("# Sub-bass rumble removal (< 30Hz) — filter.rc: 1st-order HPF, works on PCM in Liq 2.2.x")
-    script.append("# Note: filter.iir.butterworth is broken in Liquidsoap 2.2.x (GitHub issue #4124)")
-    script.append("mixed = filter.rc(frequency=30.0, mode=\"high\", mixed)")
+    # NOTE: filter.rc() is DISABLED — produces silence in Liquidsoap 2.1.3 when applied to sequence()
+    # filter.iir.butterworth is broken in Liquidsoap 2.2.x (GitHub issue #4124)
+    # Sub-bass rumble removal is skipped for now (30Hz is below human hearing anyway)
+    script.append("# Sub-bass HPF skipped: filter.rc() silences audio in Liq 2.1.3; butterworth broken in 2.2.x")
     script.append("")
     script.append("# Soft limiter (prevent clipping from overlapping transitions)")
     script.append("# Compress with proper Liquidsoap 2.1.3 parameters (times in ms, not seconds)")
@@ -1605,8 +1656,8 @@ def _preprocess_loops(plan: dict, config: dict) -> Optional[str]:
         for t in transitions
     )
 
-    if not needs_loops:
-        return None
+    # Always create temp dir — used for loop WAVs AND m4a segment pre-extraction
+    # (m4a cue_cut+seek fails in Liq 2.1.3 for late positions; WAV pre-extraction is the fix)
 
     temp_dir = create_temp_loop_dir()
     logger.info(f"Pre-processing loop segments in {temp_dir}")
@@ -1670,6 +1721,7 @@ def _generate_bpm_ramped_incoming(
     ramp_strategy: str,
     script: list,
     in_cue_in: float = 0.0,
+    temp_dir: Optional[str] = None,
 ) -> str:
     """
     Generate Liquidsoap code for BPM-ramped incoming track.
@@ -1700,11 +1752,17 @@ def _generate_bpm_ramped_incoming(
     if ramp_strategy == "no_ramp":
         # Standard: single stretch ratio for entire duration
         script.append(f'# Incoming: no BPM ramp (stay at matched target BPM)')
-        script.append(f'{in_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-        script.append(f"{in_var} = cue_cut({in_var})")
+        _wav = _extract_m4a_segment(next_file, in_cue_in, in_cue_out, temp_dir, in_var) if temp_dir else None
+        if _wav:
+            script.append(f'{in_var} = once(single("{_wav}"))')
+        else:
+            script.append(f'{in_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+            script.append(f"{in_var} = cue_cut({in_var})")
+            script.append(f"{in_var} = ffmpeg.raw.decode.audio({in_var})")
         if next_stretch != 1.0:
             script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
-        script.append(f"{in_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_var})")
+        if lpf_freq < 18000.0:
+            script.append(f"{in_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_var})")
         script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
         return in_var
 
@@ -1719,20 +1777,32 @@ def _generate_bpm_ramped_incoming(
         # First half: target BPM
         in_1_var = f"{in_var}_seg1"
         mid_cue = in_cue_in + half_sec
-        script.append(f'{in_1_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={mid_cue:.3f}:{next_file}"))')
-        script.append(f"{in_1_var} = cue_cut({in_1_var})")
+        _wav1 = _extract_m4a_segment(next_file, in_cue_in, mid_cue, temp_dir, in_1_var) if temp_dir else None
+        if _wav1:
+            script.append(f'{in_1_var} = once(single("{_wav1}"))')
+        else:
+            script.append(f'{in_1_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={mid_cue:.3f}:{next_file}"))')
+            script.append(f"{in_1_var} = cue_cut({in_1_var})")
+            script.append(f"{in_1_var} = ffmpeg.raw.decode.audio({in_1_var})")
         if next_stretch != 1.0:
             script.append(f"{in_1_var} = stretch(ratio={next_stretch:.3f}, {in_1_var})")
-        script.append(f"{in_1_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_1_var})")
+        if lpf_freq < 18000.0:
+            script.append(f"{in_1_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_1_var})")
         script.append(f"{in_1_var} = fade.in(type=\"sin\", duration={half_sec:.1f}, {in_1_var})")
 
         # Second half: native BPM (smooth glide back)
         in_2_var = f"{in_var}_seg2"
-        script.append(f'{in_2_var} = once(single("annotate:liq_cue_in={mid_cue:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-        script.append(f"{in_2_var} = cue_cut({in_2_var})")
+        _wav2 = _extract_m4a_segment(next_file, mid_cue, in_cue_out, temp_dir, in_2_var) if temp_dir else None
+        if _wav2:
+            script.append(f'{in_2_var} = once(single("{_wav2}"))')
+        else:
+            script.append(f'{in_2_var} = once(single("annotate:liq_cue_in={mid_cue:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+            script.append(f"{in_2_var} = cue_cut({in_2_var})")
+            script.append(f"{in_2_var} = ffmpeg.raw.decode.audio({in_2_var})")
         if native_stretch != 1.0:
             script.append(f"{in_2_var} = stretch(ratio={native_stretch:.3f}, {in_2_var})")
-        script.append(f"{in_2_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_2_var})")
+        if lpf_freq < 18000.0:
+            script.append(f"{in_2_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_2_var})")
         script.append(f"{in_2_var} = fade.in(type=\"sin\", duration={half_sec:.1f}, {in_2_var})")
 
         # Layer segments
@@ -1749,18 +1819,30 @@ def _generate_bpm_ramped_incoming(
         # First segment: target BPM (aggressive)
         in_1_var = f"{in_var}_fast"
         fast_cue_out = in_cue_in + fast_sec
-        script.append(f'{in_1_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={fast_cue_out:.3f}:{next_file}"))')
-        script.append(f"{in_1_var} = cue_cut({in_1_var})")
+        _wav1 = _extract_m4a_segment(next_file, in_cue_in, fast_cue_out, temp_dir, in_1_var) if temp_dir else None
+        if _wav1:
+            script.append(f'{in_1_var} = once(single("{_wav1}"))')
+        else:
+            script.append(f'{in_1_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={fast_cue_out:.3f}:{next_file}"))')
+            script.append(f"{in_1_var} = cue_cut({in_1_var})")
+            script.append(f"{in_1_var} = ffmpeg.raw.decode.audio({in_1_var})")
         if next_stretch != 1.0:
             script.append(f"{in_1_var} = stretch(ratio={next_stretch:.3f}, {in_1_var})")
-        script.append(f"{in_1_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_1_var})")
+        if lpf_freq < 18000.0:
+            script.append(f"{in_1_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_1_var})")
         script.append(f"{in_1_var} = fade.in(type=\"sin\", duration={fast_sec:.1f}, {in_1_var})")
 
         # Second segment: settle at native BPM
         in_2_var = f"{in_var}_settle"
-        script.append(f'{in_2_var} = once(single("annotate:liq_cue_in={fast_cue_out:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-        script.append(f"{in_2_var} = cue_cut({in_2_var})")
-        script.append(f"{in_2_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_2_var})")
+        _wav2 = _extract_m4a_segment(next_file, fast_cue_out, in_cue_out, temp_dir, in_2_var) if temp_dir else None
+        if _wav2:
+            script.append(f'{in_2_var} = once(single("{_wav2}"))')
+        else:
+            script.append(f'{in_2_var} = once(single("annotate:liq_cue_in={fast_cue_out:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+            script.append(f"{in_2_var} = cue_cut({in_2_var})")
+            script.append(f"{in_2_var} = ffmpeg.raw.decode.audio({in_2_var})")
+        if lpf_freq < 18000.0:
+            script.append(f"{in_2_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_2_var})")
         script.append(f"{in_2_var} = fade.in(type=\"sin\", duration={settle_sec:.1f}, {in_2_var})")
 
         # Layer segments
@@ -1769,20 +1851,26 @@ def _generate_bpm_ramped_incoming(
 
     elif ramp_strategy == "ramp_delayed":
         # Stay at target BPM during overlap, then transition after
-        # For now, implement as: matched during overlap, then fade back hint
         script.append(f'# Incoming: delayed BPM ramp (stay matched during overlap, hint native after)')
-        script.append(f'{in_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-        script.append(f"{in_var} = cue_cut({in_var})")
+        _wav = _extract_m4a_segment(next_file, in_cue_in, in_cue_out, temp_dir, in_var) if temp_dir else None
+        if _wav:
+            script.append(f'{in_var} = once(single("{_wav}"))')
+        else:
+            script.append(f'{in_var} = once(single("annotate:liq_cue_in={in_cue_in:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+            script.append(f"{in_var} = cue_cut({in_var})")
+            script.append(f"{in_var} = ffmpeg.raw.decode.audio({in_var})")
         if next_stretch != 1.0:
             script.append(f"{in_var} = stretch(ratio={next_stretch:.3f}, {in_var})")
-        script.append(f"{in_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_var})")
+        if lpf_freq < 18000.0:
+            script.append(f"{in_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_var})")
         script.append(f"{in_var} = fade.in(type=\"sin\", duration={overlap_sec:.1f}, {in_var})")
         return in_var
 
     else:
         # Unknown strategy, fallback to no_ramp
         return _generate_bpm_ramped_incoming(
-            in_var, next_file, next_bpm, next_target, overlap_sec, in_cue_out, lpf_freq, "no_ramp", script
+            in_var, next_file, next_bpm, next_target, overlap_sec, in_cue_out, lpf_freq, "no_ramp", script,
+            in_cue_in=in_cue_in, temp_dir=temp_dir,
         )
 
 
@@ -1824,7 +1912,13 @@ def _generate_liquidsoap_script_v2(
     script.append(f"# DJ EQ Automation: {eq_status}")
     script.append("")
 
-    sequence_parts = []
+    # Liquidsoap 2.1.3 bug: cue_cut() fails on the very first source in a sequence()
+    # due to a clock initialization race condition. A 1-frame blank source as position 0
+    # initializes the clock before the first cue_cut source is requested.
+    script.append("# Warmup: 1-frame blank initializes Liquidsoap clock (cue_cut race condition workaround)")
+    script.append("warmup = blank(duration=0.04)")
+    script.append("")
+    sequence_parts = ["warmup"]
 
     for idx, trans in enumerate(transitions):
         file_path = _container_path(trans.get("file_path", ""))
@@ -1907,24 +2001,90 @@ def _generate_liquidsoap_script_v2(
                 else:
                     body_cue_out = cue_out_sec
 
+        # === PRE-CHECK: Extend bass cut from previous LPF transition through body to drop ===
+        # When a bass_swap/loop_hold/loop_roll incoming had LPF applied and the track's drop
+        # falls within the body range, hold the bass cut until the drop and slam full bass there.
+        _body_drop_sec = None
+        _body_lpf_freq = 2500.0
+        _body_prev_tt = "bass_swap"
+        _body_split_vars = None  # Set to [predrop_var, postdrop_var] when body is split
+        if idx > 0:
+            _ptrans = transitions[idx - 1]
+            _ptt = _ptrans.get("transition_type", "bass_swap")
+            _pdrop = _ptrans.get("drop_position_seconds")
+            _plpf = _ptrans.get("lpf_frequency", 2500.0)
+            if (_ptt in {"bass_swap", "loop_hold", "loop_roll", "eq_blend"} and
+                    _pdrop is not None and _plpf < 18000.0 and
+                    _pdrop > body_cue_in + 2.0 and _pdrop < body_cue_out - 2.0):
+                _body_drop_sec = _pdrop
+                _body_lpf_freq = _plpf
+                _body_prev_tt = _ptt
+
         script.append(f"# === TRACK {idx} BODY: {artist} - {title} ===" if artist else f"# === TRACK {idx} BODY ===")
         script.append(f"#   BPM: {native_bpm} -> {target_bpm}, Stretch: {stretch_ratio:.3f}")
 
-        annotations = []
-        if body_cue_in > 0:
-            annotations.append(f"liq_cue_in={body_cue_in:.3f}")
-        if body_cue_out > 0:
-            annotations.append(f"liq_cue_out={body_cue_out:.3f}")
+        def _emit_body_segment(seg_var, seg_start, seg_end):
+            """Emit Liquidsoap source lines for one body sub-segment."""
+            _seg_wav = _extract_m4a_segment(file_path, seg_start, seg_end, temp_loop_dir, seg_var) if temp_loop_dir else None
+            if _seg_wav:
+                script.append(f'{seg_var} = once(single("{_seg_wav}"))')
+            else:
+                _seg_ann = f"liq_cue_in={seg_start:.3f},liq_cue_out={seg_end:.3f}"
+                script.append(f'{seg_var} = once(single("annotate:{_seg_ann}:{file_path}"))')
+                script.append(f"{seg_var} = cue_cut({seg_var})")
+                script.append(f"{seg_var} = ffmpeg.raw.decode.audio({seg_var})")
+            if stretch_ratio != 1.0:
+                script.append(f"{seg_var} = stretch(ratio={stretch_ratio:.3f}, {seg_var})")
 
-        if annotations:
-            annotate_str = ",".join(annotations)
-            script.append(f'{body_var} = once(single("annotate:{annotate_str}:{file_path}"))')
-            script.append(f"{body_var} = cue_cut({body_var})")
+        if _body_drop_sec is not None:
+            # 🥁 DROP-SPLIT BODY: Bass cut held until detected drop, then full bass slams
+            script.append(f"# 🥁 DROP-SPLIT: Bass LPF@{_body_lpf_freq:.0f}Hz [{body_cue_in:.1f}→{_body_drop_sec:.1f}s], Full bass [{_body_drop_sec:.1f}→{body_cue_out:.1f}s]")
+            _pre_bvar = f"{body_var}_predrop"
+            _post_bvar = f"{body_var}_postdrop"
+
+            # Pre-drop: carry bass cut from the transition (LPF still applied)
+            _emit_body_segment(_pre_bvar, body_cue_in, _body_drop_sec)
+            script.append(f"# Bass cut ({_body_prev_tt}): LPF@{_body_lpf_freq:.0f}Hz held to drop")
+            script.append(f"{_pre_bvar} = filter.rc(frequency={_body_lpf_freq:.1f}, mode=\"low\", {_pre_bvar})")
+
+            # Post-drop: full bass slam — no filter!
+            _emit_body_segment(_post_bvar, _body_drop_sec, body_cue_out)
+
+            # Inject predrop+postdrop directly into outer sequence (avoid nested sequence in Liq 2.1.3)
+            _body_split_vars = [_pre_bvar, _post_bvar]
         else:
-            script.append(f'{body_var} = once(single("{file_path}"))')
+            # Normal body: single contiguous segment
+            annotations = []
+            if body_cue_in > 0:
+                annotations.append(f"liq_cue_in={body_cue_in:.3f}")
+            if body_cue_out > 0:
+                annotations.append(f"liq_cue_out={body_cue_out:.3f}")
 
-        if stretch_ratio != 1.0:
-            script.append(f"{body_var} = stretch(ratio={stretch_ratio:.3f}, {body_var})")
+            # Pre-extract m4a segment to WAV: Liq 2.1.3 cue_cut seek fails for late positions
+            if annotations and temp_loop_dir:
+                wav_path = _extract_m4a_segment(
+                    file_path, body_cue_in, body_cue_out, temp_loop_dir, f"body_{idx}"
+                )
+                if wav_path:
+                    script.append(f'{body_var} = once(single("{wav_path}"))')
+                    # WAV is already PCM: no cue_cut or ffmpeg.raw.decode.audio needed
+                else:
+                    # Fallback: annotate+cue_cut (may fail for late cue_in positions)
+                    annotate_str = ",".join(annotations)
+                    script.append(f'{body_var} = once(single("annotate:{annotate_str}:{file_path}"))')
+                    script.append(f"{body_var} = cue_cut({body_var})")
+                    script.append(f"{body_var} = ffmpeg.raw.decode.audio({body_var})")
+            elif annotations:
+                annotate_str = ",".join(annotations)
+                script.append(f'{body_var} = once(single("annotate:{annotate_str}:{file_path}"))')
+                script.append(f"{body_var} = cue_cut({body_var})")
+                script.append(f"{body_var} = ffmpeg.raw.decode.audio({body_var})")
+            else:
+                script.append(f'{body_var} = once(single("{file_path}"))')
+                script.append(f"{body_var} = ffmpeg.raw.decode.audio({body_var})")
+
+            if stretch_ratio != 1.0:
+                script.append(f"{body_var} = stretch(ratio={stretch_ratio:.3f}, {body_var})")
 
         # === VOCAL PREVIEW MIXING (Phase 2026-02-12) ===
         # Layer vocal preview from next track during non-vocal sections
@@ -1952,7 +2112,11 @@ def _generate_liquidsoap_script_v2(
 
 
         script.append("")
-        sequence_parts.append(body_var)
+        if _body_split_vars is not None:
+            # Drop-split: inject predrop and postdrop directly (avoid nested sequence in Liq 2.1.3)
+            sequence_parts.extend(_body_split_vars)
+        else:
+            sequence_parts.append(body_var)
 
         # === TRANSITION ZONE ===
         if not is_last_track and next_trans:
@@ -2013,7 +2177,7 @@ def _generate_liquidsoap_script_v2(
                 bpm_ramp_strat = trans.get("bpm_ramp_strategy", "no_ramp")
                 _generate_bpm_ramped_incoming(
                     in_var, next_file, next_bpm, next_target, phase1_overlap_sec, phase1_in_cue_out,
-                    lpf_freq, bpm_ramp_strat, script
+                    lpf_freq, bpm_ramp_strat, script, temp_dir=temp_loop_dir
                 )
 
             elif transition_type == "loop_roll" and trans.get("_loop_wav_path"):
@@ -2032,7 +2196,7 @@ def _generate_liquidsoap_script_v2(
                 bpm_ramp_strat = trans.get("bpm_ramp_strategy", "no_ramp")
                 _generate_bpm_ramped_incoming(
                     in_var, next_file, next_bpm, next_target, in_overlap_sec, phase1_in_cue_out,
-                    lpf_freq, bpm_ramp_strat, script
+                    lpf_freq, bpm_ramp_strat, script, temp_dir=temp_loop_dir
                 )
 
             elif transition_type == "drop_swap":
@@ -2041,8 +2205,15 @@ def _generate_liquidsoap_script_v2(
                 out_end = phase1_out_end      # Use Phase 1-adjusted end
 
                 script.append(f'# Outgoing: fast fade out')
-                script.append(f'{out_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
-                script.append(f"{out_var} = cue_cut({out_var})")
+                _seg_wav = _extract_m4a_segment(
+                    file_path, out_start, out_end, temp_loop_dir, f"t{idx}{idx+1}_out"
+                ) if temp_loop_dir else None
+                if _seg_wav:
+                    script.append(f'{out_var} = once(single("{_seg_wav}"))')
+                else:
+                    script.append(f'{out_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
+                    script.append(f"{out_var} = cue_cut({out_var})")
+                    script.append(f"{out_var} = ffmpeg.raw.decode.audio({out_var})")
                 if stretch_ratio != 1.0:
                     script.append(f"{out_var} = stretch(ratio={stretch_ratio:.3f}, {out_var})")
                 script.append(f"{out_var} = fade.out(type=\"sin\", duration={phase1_fade_duration:.1f}, {out_var})")
@@ -2055,7 +2226,7 @@ def _generate_liquidsoap_script_v2(
                 # For drop_swap with BPM ramping, use no filter (lpf_freq = 20000 means off)
                 _generate_bpm_ramped_incoming(
                     in_var, next_file, next_bpm, next_target, phase1_overlap_sec, drop_end,
-                    20000.0, bpm_ramp_strat, script, in_cue_in=drop_sec
+                    20000.0, bpm_ramp_strat, script, in_cue_in=drop_sec, temp_dir=temp_loop_dir
                 )
 
             elif transition_type == "eq_blend":
@@ -2071,21 +2242,33 @@ def _generate_liquidsoap_script_v2(
 
                 # Aggressive HPF for first 1 bar (strong bass cut)
                 out_bar1_var = f"{out_var}_bar1"
-                script.append(f'{out_bar1_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_start + bar_sec:.3f}:{file_path}"))')
-                script.append(f"{out_bar1_var} = cue_cut({out_bar1_var})")
+                _bar1_wav = _extract_m4a_segment(file_path, out_start, out_start + bar_sec, temp_loop_dir, out_bar1_var) if temp_loop_dir else None
+                if _bar1_wav:
+                    script.append(f'{out_bar1_var} = once(single("{_bar1_wav}"))')
+                else:
+                    script.append(f'{out_bar1_var} = once(single("annotate:liq_cue_in={out_start:.3f},liq_cue_out={out_start + bar_sec:.3f}:{file_path}"))')
+                    script.append(f"{out_bar1_var} = cue_cut({out_bar1_var})")
+                    script.append(f"{out_bar1_var} = ffmpeg.raw.decode.audio({out_bar1_var})")
                 if stretch_ratio != 1.0:
                     script.append(f"{out_bar1_var} = stretch(ratio={stretch_ratio:.3f}, {out_bar1_var})")
-                script.append(f"{out_bar1_var} = filter.rc(frequency=200.0, mode=\"high\", {out_bar1_var})")
+                # DISABLED: HPF removed - let Phase 5 techniques handle bass cuts (bars 8-10.7)
+                # script.append(f"{out_bar1_var} = filter.rc(frequency=200.0, mode=\"high\", {out_bar1_var})")
                 script.append(f"{out_bar1_var} = fade.out(type=\"sin\", duration={phase1_fade_duration:.1f}, {out_bar1_var})")
 
                 # Subtle HPF for remaining bars (settle into steady state)
                 if phase1_overlap_sec > bar_sec * 1.5:
                     out_remaining_var = f"{out_var}_remain"
-                    script.append(f'{out_remaining_var} = once(single("annotate:liq_cue_in={out_start + bar_sec:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
-                    script.append(f"{out_remaining_var} = cue_cut({out_remaining_var})")
+                    _remain_wav = _extract_m4a_segment(file_path, out_start + bar_sec, out_end, temp_loop_dir, out_remaining_var) if temp_loop_dir else None
+                    if _remain_wav:
+                        script.append(f'{out_remaining_var} = once(single("{_remain_wav}"))')
+                    else:
+                        script.append(f'{out_remaining_var} = once(single("annotate:liq_cue_in={out_start + bar_sec:.3f},liq_cue_out={out_end:.3f}:{file_path}"))')
+                        script.append(f"{out_remaining_var} = cue_cut({out_remaining_var})")
+                        script.append(f"{out_remaining_var} = ffmpeg.raw.decode.audio({out_remaining_var})")
                     if stretch_ratio != 1.0:
                         script.append(f"{out_remaining_var} = stretch(ratio={stretch_ratio:.3f}, {out_remaining_var})")
-                    script.append(f"{out_remaining_var} = filter.rc(frequency={hpf_freq:.1f}, mode=\"high\", {out_remaining_var})")
+                    # DISABLED: HPF removed - let Phase 5 techniques handle bass cuts
+                    # script.append(f"{out_remaining_var} = filter.rc(frequency={hpf_freq:.1f}, mode=\"high\", {out_remaining_var})")
                     script.append(f"{out_remaining_var} = fade.out(type=\"sin\", duration={phase1_fade_duration - bar_sec:.1f}, {out_remaining_var})")
                     script.append(f"{out_var} = add(normalize=false, [{out_bar1_var}, {out_remaining_var}])")
                 else:
@@ -2097,8 +2280,13 @@ def _generate_liquidsoap_script_v2(
 
                 # Aggressive LPF for first 1 bar (keep it warm, not bright)
                 in_bar1_var = f"{in_var}_bar1"
-                script.append(f'{in_bar1_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={bar_sec:.3f}:{next_file}"))')
-                script.append(f"{in_bar1_var} = cue_cut({in_bar1_var})")
+                _in_bar1_wav = _extract_m4a_segment(next_file, 0.0, bar_sec, temp_loop_dir, in_bar1_var) if temp_loop_dir else None
+                if _in_bar1_wav:
+                    script.append(f'{in_bar1_var} = once(single("{_in_bar1_wav}"))')
+                else:
+                    script.append(f'{in_bar1_var} = once(single("annotate:liq_cue_in=0.0,liq_cue_out={bar_sec:.3f}:{next_file}"))')
+                    script.append(f"{in_bar1_var} = cue_cut({in_bar1_var})")
+                    script.append(f"{in_bar1_var} = ffmpeg.raw.decode.audio({in_bar1_var})")
                 if next_stretch != 1.0:
                     script.append(f"{in_bar1_var} = stretch(ratio={next_stretch:.3f}, {in_bar1_var})")
                 script.append(f"{in_bar1_var} = filter.rc(frequency=500.0, mode=\"low\", {in_bar1_var})")
@@ -2107,11 +2295,17 @@ def _generate_liquidsoap_script_v2(
                 # Open filter for remaining bars (gradually brighten)
                 if in_cue_out > bar_sec * 1.5:
                     in_remaining_var = f"{in_var}_remain"
-                    script.append(f'{in_remaining_var} = once(single("annotate:liq_cue_in={bar_sec:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
-                    script.append(f"{in_remaining_var} = cue_cut({in_remaining_var})")
+                    _in_remain_wav = _extract_m4a_segment(next_file, bar_sec, in_cue_out, temp_loop_dir, in_remaining_var) if temp_loop_dir else None
+                    if _in_remain_wav:
+                        script.append(f'{in_remaining_var} = once(single("{_in_remain_wav}"))')
+                    else:
+                        script.append(f'{in_remaining_var} = once(single("annotate:liq_cue_in={bar_sec:.3f},liq_cue_out={in_cue_out:.3f}:{next_file}"))')
+                        script.append(f"{in_remaining_var} = cue_cut({in_remaining_var})")
+                        script.append(f"{in_remaining_var} = ffmpeg.raw.decode.audio({in_remaining_var})")
                     if next_stretch != 1.0:
                         script.append(f"{in_remaining_var} = stretch(ratio={next_stretch:.3f}, {in_remaining_var})")
-                    script.append(f"{in_remaining_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_remaining_var})")
+                    if lpf_freq < 18000.0:
+                        script.append(f"{in_remaining_var} = filter.rc(frequency={lpf_freq:.1f}, mode=\"low\", {in_remaining_var})")
                     script.append(f"{in_remaining_var} = fade.in(type=\"sin\", duration={in_cue_out - bar_sec:.1f}, {in_remaining_var})")
                     script.append(f"{in_var} = add(normalize=false, [{in_bar1_var}, {in_remaining_var}])")
                 else:
@@ -2123,13 +2317,21 @@ def _generate_liquidsoap_script_v2(
                 out_end = phase1_out_end      # Use Phase 1-adjusted end
 
                 script.append(f'# Outgoing: Segment-based EQ (strategy: {eq_strategy}) + fade out')
-                
+
+                # Pre-extract outgoing segment to WAV to avoid Liq 2.1.3 cue_cut seek failure
+                _out_seg_wav = _extract_m4a_segment(
+                    file_path, out_start, out_end, temp_loop_dir, f"t{idx}{idx+1}_out"
+                ) if temp_loop_dir else None
+                _out_seg_file = _out_seg_wav if _out_seg_wav else file_path
+                _out_seg_cue_in = 0.0 if _out_seg_wav else out_start
+                _out_seg_cue_out = 0.0 if _out_seg_wav else out_end
+
                 # Apply segment EQ strategy to outgoing drop segment
                 eq_lines = apply_segment_eq(
                     segment_var=out_var,
-                    file_path=file_path,
-                    cue_in=out_start,
-                    cue_out=out_end,
+                    file_path=_out_seg_file,
+                    cue_in=_out_seg_cue_in,
+                    cue_out=_out_seg_cue_out,
                     bpm=native_bpm or 128.0,
                     overlap_bars=overlap_bars,
                     strategy=eq_strategy
@@ -2145,9 +2347,10 @@ def _generate_liquidsoap_script_v2(
                 # 🎵 PHASE 1: Use Phase 1-adjusted cue times if available
                 in_cue_out_final = phase1_in_cue_out
                 bpm_ramp_strat = trans.get("bpm_ramp_strategy", "no_ramp")
+
                 _generate_bpm_ramped_incoming(
                     in_var, next_file, next_bpm, next_target, phase1_overlap_sec, in_cue_out_final,
-                    lpf_freq, bpm_ramp_strat, script
+                    lpf_freq, bpm_ramp_strat, script, temp_dir=temp_loop_dir
                 )
 
             # Layer outgoing + incoming
@@ -2162,7 +2365,8 @@ def _generate_liquidsoap_script_v2(
                         phase5_techniques,
                         transition_var=trans_var,
                         bpm=effective_bpm,
-                        overlap_bars=overlap_bars
+                        overlap_bars=overlap_bars,
+                        transition_type=transition_type
                     )
                     if phase5_code:
                         script.append("")
@@ -2186,9 +2390,7 @@ def _generate_liquidsoap_script_v2(
 
     # === MASTER PROCESSING ===
     script.append("# === MASTER PROCESSING ===")
-    script.append("# Sub-bass rumble removal (< 30Hz) — filter.rc: 1st-order HPF, works on PCM in Liq 2.2.x")
-    script.append("# Note: filter.iir.butterworth is broken in Liquidsoap 2.2.x (GitHub issue #4124)")
-    script.append("mixed = filter.rc(frequency=30.0, mode=\"high\", mixed)")
+    script.append("# Sub-bass HPF skipped: filter.rc() silences audio in Liq 2.1.3; butterworth broken in 2.2.x")
     script.append("")
     script.append("# Soft limiter (prevent clipping from overlapping transitions)")
     script.append("# Compress with proper Liquidsoap 2.1.3 parameters (times in ms, not seconds)")

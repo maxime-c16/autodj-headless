@@ -1,0 +1,144 @@
+{
+  "album": "Rusty Chains",
+  "timestamp": "2026-02-23T14:34:01.835071",
+  "status": "success",
+  "tracks_processed": 8,
+  "transitions_processed": 7,
+  "phases_applied": {
+    "phase1": {
+      "count": 7,
+      "total": 7,
+      "coverage": "100%",
+      "details": [
+        {
+          "transition": 1,
+          "start_seconds": 212.38095238095238,
+          "duration_seconds": 7.61904761904762
+        },
+        {
+          "transition": 2,
+          "start_seconds": 262.4409448818898,
+          "duration_seconds": 7.559055118110223
+        },
+        {
+          "transition": 3,
+          "start_seconds": 277.4409448818898,
+          "duration_seconds": 7.559055118110223
+        },
+        {
+          "transition": 4,
+          "start_seconds": 242.5581395348837,
+          "duration_seconds": 7.441860465116292
+        },
+        {
+          "transition": 5,
+          "start_seconds": 262.5,
+          "duration_seconds": 7.5
+        },
+        {
+          "transition": 6,
+          "start_seconds": 272.5581395348837,
+          "duration_seconds": 7.441860465116292
+        },
+        {
+          "transition": 7,
+          "start_seconds": 292.5,
+          "duration_seconds": 7.5
+        }
+      ]
+    },
+    "phase2": {
+      "count": 7,
+      "total": 7,
+      "coverage": "100%",
+      "average_intensity": 0.6950000000000001,
+      "details": [
+        {
+          "transition": 1,
+          "hpf_frequency": 200.0,
+          "intensity": 0.6950000000000001
+        },
+        {
+          "transition": 2,
+          "hpf_frequency": 200.0,
+          "intensity": 0.755
+        },
+        {
+          "transition": 3,
+          "hpf_frequency": 200.0,
+          "intensity": 0.56
+        },
+        {
+          "transition": 4,
+          "hpf_frequency": 200.0,
+          "intensity": 0.74
+        },
+        {
+          "transition": 5,
+          "hpf_frequency": 200.0,
+          "intensity": 0.725
+        },
+        {
+          "transition": 6,
+          "hpf_frequency": 200.0,
+          "intensity": 0.77
+        },
+        {
+          "transition": 7,
+          "hpf_frequency": 200.0,
+          "intensity": 0.62
+        }
+      ]
+    },
+    "phase4": {
+      "gradual": 4,
+      "instant": 3,
+      "coverage": "100%",
+      "details": [
+        {
+          "transition": 1,
+          "strategy": "instant",
+          "timing_variation": 0.48314439037009943
+        },
+        {
+          "transition": 2,
+          "strategy": "gradual",
+          "timing_variation": 0.7945693806174023
+        },
+        {
+          "transition": 3,
+          "strategy": "instant",
+          "timing_variation": -0.6530224835120466
+        },
+        {
+          "transition": 4,
+          "strategy": "instant",
+          "timing_variation": -1.2868445660800656
+        },
+        {
+          "transition": 5,
+          "strategy": "gradual",
+          "timing_variation": 0.2602041803110685
+        },
+        {
+          "transition": 6,
+          "strategy": "gradual",
+          "timing_variation": -1.2788568632830313
+        },
+        {
+          "transition": 7,
+          "strategy": "gradual",
+          "timing_variation": 0.5937350196453381
+        }
+      ]
+    }
+  },
+  "listening_guide": {
+    "phase1_location": "Last 30 seconds of each track (OUTRO section)",
+    "phase1_what_to_hear": "Incoming track fading in 7-8 seconds before outro ends",
+    "phase2_location": "At exact transition point (where tracks meet)",
+    "phase2_what_to_hear": "Clean bass entry, no muddy overlap",
+    "phase4_location": "Across multiple transitions",
+    "phase4_what_to_hear": "Mix of smooth (gradual) and snappy (instant) transitions"
+  }
+}

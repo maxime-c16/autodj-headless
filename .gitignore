@@ -82,3 +82,10 @@ liquidsoap.pid
 # Documentation (unless intentionally committed)
 docs/generated/
 site/
+
+showcase/
+src/autodj/output/
+scripts/output/
+data/logs
+data/logs/
+a_b_tests/

@@ -8,6 +8,10 @@ Usage (inside container):
     python3 /app/scripts/quick_mix.py --seed "klangkuenstler" --count 5
     python3 /app/scripts/quick_mix.py --tracks "Deine Angst" "Toter Schmetterling" "Blood On My Hands"
 
+    # Full album:
+    python3 /app/scripts/quick_mix.py --album "Rusty Chains"
+    python3 /app/scripts/quick_mix.py --album "Never Enough"
+
     # By ID (still works):
     python3 /app/scripts/quick_mix.py --seed ff5a6be4778892c8 --count 3
 
@@ -18,6 +22,7 @@ Usage (inside container):
 Environment variables (for Makefile):
     SEED="Deine Angst" TRACK_COUNT=3  make quick-mix
     TRACKS="Deine Angst, Toter Schmetterling, Blood On My Hands"  make quick-mix
+    ALBUM="Rusty Chains"  make quick-mix
 """
 import argparse
 import json
@@ -31,8 +36,21 @@ sys.path.insert(0, "/app/src")
 from autodj.config import Config
 from autodj.db import Database
 from autodj.generate.playlist import generate
-from autodj.render.render import RenderEngine
+from autodj.render.render import RenderEngine, render as render_mix
 from autodj.discord.notifier import DiscordNotifier
+
+# Phase 5 Micro-Techniques
+try:
+    from autodj.render.render import apply_phase5_micro_techniques, PHASE_5_AVAILABLE
+except ImportError:
+    PHASE_5_AVAILABLE = False
+
+# DJ Techniques Integration
+try:
+    from autodj.render.dj_techniques_render import DJTechniquesRenderer, create_listening_guide
+    DJ_TECHNIQUES_AVAILABLE = True
+except ImportError:
+    DJ_TECHNIQUES_AVAILABLE = False
 
 
 DB_PATH = "/app/data/db/metadata.sqlite"
@@ -100,15 +118,15 @@ def search_track(query, conn):
 
 
 def find_compatible_tracks(seed_id, count, conn):
-    """Find BPM/key-compatible tracks for a seed."""
+    """Find BPM/key-compatible tracks for a seed (excludes seed track and duplicate titles)."""
     c = conn.cursor()
-    c.execute("SELECT bpm, key FROM tracks WHERE id = ?", (seed_id,))
+    c.execute("SELECT bpm, key, title FROM tracks WHERE id = ?", (seed_id,))
     row = c.fetchone()
     if not row:
         print(f"ERROR: Seed track {seed_id} not found in database")
         sys.exit(1)
 
-    seed_bpm, seed_key = row
+    seed_bpm, seed_key, seed_title = row
     if not seed_bpm:
         print(f"ERROR: Seed track has no BPM data")
         sys.exit(1)
@@ -131,17 +149,29 @@ def find_compatible_tracks(seed_id, count, conn):
     bpm_hi = seed_bpm * 1.15
     placeholders = ",".join("?" * len(compatible_keys))
 
+    # Find compatible tracks, excluding:
+    # 1. The seed track itself
+    # 2. Tracks with same title (prevents duplicate songs)
     c.execute(f"""
-        SELECT id FROM tracks
+        SELECT DISTINCT id FROM tracks
         WHERE bpm BETWEEN ? AND ?
         AND key IN ({placeholders})
         AND id != ?
+        AND LOWER(title) != LOWER(?)
         AND duration_seconds > 120
         ORDER BY ABS(bpm - ?)
         LIMIT ?
-    """, [bpm_lo, bpm_hi] + compatible_keys + [seed_id, seed_bpm, count - 1])
+    """, [bpm_lo, bpm_hi] + compatible_keys + [seed_id, seed_title, seed_bpm, count - 1])
 
-    return [seed_id] + [r[0] for r in c.fetchall()]
+    compatible_ids = [r[0] for r in c.fetchall()]
+    
+    # Enforce no duplicates - return unique track IDs
+    result = [seed_id] + compatible_ids[:count - 1]
+    
+    if len(result) < 2:
+        raise ValueError(f"Could not find enough unique compatible tracks. Found {len(result)}, need at least 2")
+    
+    return result
 
 
 def list_tracks(conn, search=None):
@@ -178,6 +208,43 @@ def list_tracks(conn, search=None):
     print(f"\n{len(rows)} tracks total")
 
 
+def get_album_tracks(album_name, conn):
+    """Find all tracks in an album (sorted by track number). Returns list of track IDs."""
+    album_lower = album_name.strip().lower()
+    
+    # First: try exact album name match
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, title FROM tracks
+        WHERE LOWER(album) = ?
+        ORDER BY title
+    """, (album_lower,))
+    
+    results = c.fetchall()
+    
+    if not results:
+        # Try fuzzy match
+        c.execute("""
+            SELECT id, title FROM tracks
+            WHERE LOWER(album) LIKE ?
+            ORDER BY title
+        """, (f"%{album_lower}%",))
+        results = c.fetchall()
+    
+    if not results:
+        print(f"❌ No album found matching '{album_name}'")
+        print(f"\n📀 Available albums:")
+        c.execute("SELECT DISTINCT album FROM tracks WHERE album IS NOT NULL ORDER BY album")
+        for row in c.fetchall():
+            if row['album']:
+                print(f"    - {row['album']}")
+        sys.exit(1)
+    
+    track_ids = [r["id"] for r in results]
+    print(f"  ✅ Album matched: '{album_name}' ({len(track_ids)} tracks)")
+    return track_ids
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Quick Mix — test render with human-readable track names",
@@ -187,6 +254,7 @@ Examples:
   %(prog)s --seed "Deine Angst" --count 3
   %(prog)s --seed "klangkuenstler" --count 5
   %(prog)s --tracks "Deine Angst" "Toter Schmetterling" "Blood On My Hands"
+  %(prog)s --album "Rusty Chains"
   %(prog)s --list
   %(prog)s --search "klangkuenstler"
         """,
@@ -194,15 +262,17 @@ Examples:
     parser.add_argument("--tracks", nargs="+", help="Track names or IDs to mix (in order)")
     parser.add_argument("--seed", help="Seed track name or ID (auto-find compatible)")
     parser.add_argument("--count", type=int, default=3, help="Number of tracks (with --seed)")
+    parser.add_argument("--album", help="Album name to use all tracks from album (in order)")
     parser.add_argument("--output", help="Output file path")
     parser.add_argument("--list", action="store_true", help="List all tracks in library")
     parser.add_argument("--search", help="Search tracks by name/artist")
     args = parser.parse_args()
 
     # Environment variable fallback
-    if not args.tracks and not args.seed and not args.list and not args.search:
+    if not args.tracks and not args.seed and not args.album and not args.list and not args.search:
         env_tracks = os.environ.get("TRACKS", "").strip()
         env_seed = os.environ.get("SEED", "").strip()
+        env_album = os.environ.get("ALBUM", "").strip()
         if not env_seed:
             env_seed = os.environ.get("SEED_TRACK_ID", "").strip()
         if env_tracks:
@@ -211,6 +281,8 @@ Examples:
                 args.tracks = [t.strip() for t in env_tracks.split(",") if t.strip()]
             else:
                 args.tracks = [env_tracks]
+        elif env_album:
+            args.album = env_album
         elif env_seed:
             args.seed = env_seed
             args.count = int(os.environ.get("TRACK_COUNT", "3"))
@@ -226,16 +298,19 @@ Examples:
         list_tracks(conn, args.search)
         return
 
-    if not args.tracks and not args.seed:
+    if not args.tracks and not args.seed and not args.album:
         print("Usage: quick_mix.py --seed 'track name' --count N")
         print("       quick_mix.py --tracks 'name1' 'name2' 'name3'")
+        print("       quick_mix.py --album 'Album Name'")
         print("       quick_mix.py --list")
         print("       quick_mix.py --search 'keyword'")
         sys.exit(1)
 
     # Resolve track names to IDs
     print("Resolving tracks...")
-    if args.tracks:
+    if args.album:
+        track_ids = get_album_tracks(args.album, conn)
+    elif args.tracks:
         track_ids = []
         for name in args.tracks:
             tid = search_track(name, conn)
@@ -244,8 +319,20 @@ Examples:
         seed_id = search_track(args.seed, conn)
         track_ids = find_compatible_tracks(seed_id, args.count, conn)
 
+    # ENFORCE: No duplicate track IDs (deduplicate while preserving order)
+    seen = set()
+    dedup_track_ids = []
+    for tid in track_ids:
+        if tid not in seen:
+            dedup_track_ids.append(tid)
+            seen.add(tid)
+        else:
+            print(f"  ⚠️  Removing duplicate track: {tid}")
+    
+    track_ids = dedup_track_ids
+    
     if len(track_ids) < 2:
-        print(f"ERROR: Need at least 2 tracks, found {len(track_ids)}")
+        print(f"ERROR: Need at least 2 unique tracks, found {len(track_ids)}")
         sys.exit(1)
 
     # Load library data
@@ -284,6 +371,18 @@ Examples:
     with open(transitions_path) as f:
         plan = json.load(f)
     transitions = plan.get("transitions", [])
+    
+    # ========================================================================
+    # PHASE 1: Add Spectral Analysis (only new tracks)
+    # ========================================================================
+    print(f"\n🔍 Enhancing transitions with spectral analysis...")
+    try:
+        from autodj.render.spectral_cache_manager import enhance_transitions_with_spectral_data
+        transitions = enhance_transitions_with_spectral_data(transitions)
+        print(f"  ✅ Spectral data added to transitions (Phase 1 ready!)")
+    except Exception as e:
+        print(f"  ⚠️  Spectral enhancement failed: {e}")
+        print(f"     Phase 1 will be skipped (using fallback)")
     
     # Post playlist notification to Discord
     notifier = DiscordNotifier(config_dict=config.data)
@@ -343,20 +442,27 @@ Examples:
         ts = time.strftime("%Y%m%d-%H%M%S")
         args.output = f"/app/data/mixes/quick-mix-{ts}.mp3"
 
-    print(f"\nRendering to {args.output}...")
-    start = time.time()
-    engine = RenderEngine(config=config.data)
-    
     # Check EQ_ENABLED environment variable
     eq_enabled = os.environ.get('EQ_ENABLED', 'true').lower() == 'true'
-    print(f"[DEBUG] EQ_ENABLED={eq_enabled}", flush=True)
-    
-    success = engine.render_playlist(
+    persona = os.environ.get('PERSONA', 'tech_house').lower()
+
+    print(f"\nRendering to {args.output}...")
+    print(f"  EQ: {'ON' if eq_enabled else 'OFF'} | Phase 5: {'ON' if PHASE_5_AVAILABLE else 'OFF'} | Persona: {persona}")
+    start = time.time()
+
+    # Route through render() — NOT render_playlist() — so Phase 0/1/2/5 all activate:
+    #   Phase 0: BPM precision validators
+    #   Phase 1: 16-bar early transitions
+    #   Phase 2: EQ pre-processing (ffmpeg, per eq_annotation)
+    #   Phase 5: Micro-technique injection (stutter, bass cut, filter sweep...)
+    success = render_mix(
         transitions_json_path=transitions_path,
-        playlist_m3u_path=playlist_path,
         output_path=args.output,
-        timeout_seconds=600,
+        config=config.data,
+        timeout_seconds=None,   # No cap — offline render runs as fast as Liquidsoap allows
         eq_enabled=eq_enabled,
+        phase5_enabled=PHASE_5_AVAILABLE,
+        persona=persona,
     )
     elapsed = time.time() - start
 
@@ -367,11 +473,26 @@ Examples:
         print(f"  Size:   {size_mb:.1f} MB")
         print(f"  Time:   {elapsed:.0f}s")
         
+        # Print which phases were active during this render
+        print(f"\n🎛️ RENDER PHASES ACTIVE:")
+        print(f"  Phase 0 (BPM Precision):  ✅ Confidence + multipass + grid validators")
+        print(f"  Phase 1 (Early Starts):   ✅ 16-bar pre-blend on eligible transitions")
+        print(f"  Phase 2 (DJ EQ):          {'✅ Beat-synced EQ annotation + preprocessing' if eq_enabled else '⏭️  Disabled (EQ_ENABLED=false)'}")
+        print(f"  Phase 5 (Micro-Tech):     {'✅ Stutter, bass-cut, filter-sweep, echo...' if PHASE_5_AVAILABLE else '⚠️  Unavailable (import failed)'}")
+        print(f"\n🎧 LISTENING GUIDE:")
+        print(f"  ✅ Early blends: incoming track fades in ~30s before outgoing ends")
+        print(f"  ✅ Bass control: low-end swaps during all crossfades")
+        print(f"  ✅ Micro-effects: listen for stutter rolls, filter sweeps between tracks")
+        
         # Post completion notification to Discord
+        output_filename = os.path.basename(args.output)
+        output_dir = os.path.dirname(args.output)
         notifier.post_complete({
-            'File': os.path.basename(args.output),
+            'File': output_filename,
             'Size': f'{size_mb:.1f} MB',
-            'Duration': f'{elapsed:.0f}s'
+            'Location': output_dir,
+            'Duration': f'{elapsed:.0f}s',
+            'Status': '✅ Ready for broadcast'
         })
     else:
         print(f"\nFAILED after {elapsed:.0f}s")

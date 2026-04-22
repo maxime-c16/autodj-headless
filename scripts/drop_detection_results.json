@@ -1,0 +1,126 @@
+{
+  "Without Pain": [
+    {
+      "time": 209.44399092970522,
+      "magnitude": 96.4588199008107,
+      "type": "bass_drop",
+      "confidence": 0.9858823327822817
+    },
+    {
+      "time": 197.0793650793651,
+      "magnitude": 96.26656700609131,
+      "type": "bass_drop",
+      "confidence": 0.9848142611449517
+    },
+    {
+      "time": 161.80825396825398,
+      "magnitude": 96.09202464152506,
+      "type": "bass_drop",
+      "confidence": 0.983844581341806
+    },
+    {
+      "time": 69.06775510204082,
+      "magnitude": 95.3265361680239,
+      "type": "bass_drop",
+      "confidence": 0.9795918676001327
+    },
+    {
+      "time": 46.172879818594105,
+      "magnitude": 95.25179033176687,
+      "type": "bass_drop",
+      "confidence": 0.9791766129542605
+    },
+    {
+      "time": 113.44108843537416,
+      "magnitude": 94.49128396315164,
+      "type": "bass_drop",
+      "confidence": 0.9749515775730646
+    },
+    {
+      "time": 126.72290249433107,
+      "magnitude": 92.85344213517112,
+      "type": "bass_drop",
+      "confidence": 0.9658524563065063
+    },
+    {
+      "time": 34.528072562358275,
+      "magnitude": 92.59687844254375,
+      "type": "bass_drop",
+      "confidence": 0.9644271024585764
+    },
+    {
+      "time": 81.79229024943311,
+      "magnitude": 89.27129762822148,
+      "type": "bass_drop",
+      "confidence": 0.9459516534901193
+    },
+    {
+      "time": 87.60888888888888,
+      "magnitude": 88.7490691920886,
+      "type": "bass_drop",
+      "confidence": 0.9430503844004923
+    }
+  ],
+  "Rusty Chains": [
+    {
+      "time": 33.69215419501134,
+      "magnitude": 97.6479999330736,
+      "type": "bass_drop",
+      "confidence": 0.99
+    },
+    {
+      "time": 57.78285714285714,
+      "magnitude": 98.50634042932268,
+      "type": "bass_drop",
+      "confidence": 0.99
+    },
+    {
+      "time": 117.77160997732426,
+      "magnitude": 97.60471335801616,
+      "type": "bass_drop",
+      "confidence": 0.99
+    },
+    {
+      "time": 188.1512925170068,
+      "magnitude": 98.6299548568628,
+      "type": "bass_drop",
+      "confidence": 0.99
+    },
+    {
+      "time": 198.51900226757368,
+      "magnitude": 98.0119694220284,
+      "type": "bass_drop",
+      "confidence": 0.99
+    },
+    {
+      "time": 212.77605442176872,
+      "magnitude": 97.32582976715862,
+      "type": "bass_drop",
+      "confidence": 0.99
+    },
+    {
+      "time": 123.89006802721089,
+      "magnitude": 97.15348526316495,
+      "type": "bass_drop",
+      "confidence": 0.9897415847953608
+    },
+    {
+      "time": 64.81850340136054,
+      "magnitude": 92.84192975851123,
+      "type": "bass_drop",
+      "confidence": 0.9657884986583958
+    },
+    {
+      "time": 223.88680272108843,
+      "magnitude": 91.8292025942809,
+      "type": "bass_drop",
+      "confidence": 0.9601622366348939
+    },
+    {
+      "time": 75.72027210884353,
+      "magnitude": 91.74214080056466,
+      "type": "bass_drop",
+      "confidence": 0.959678560003137
+    }
+  ]
+}

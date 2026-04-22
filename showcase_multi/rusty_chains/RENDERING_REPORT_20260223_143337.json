@@ -1,0 +1,79 @@
+{
+  "album": "Rusty Chains",
+  "timestamp": "2026-02-23T14:33:37.763805",
+  "status": "success",
+  "tracks_processed": 8,
+  "transitions_processed": 7,
+  "phases_applied": {
+    "phase1": {
+      "count": 0,
+      "total": 7,
+      "coverage": "0%",
+      "details": []
+    },
+    "phase2": {
+      "count": 0,
+      "total": 7,
+      "coverage": "0%",
+      "average_intensity": 0,
+      "details": []
+    },
+    "phase4": {
+      "gradual": 3,
+      "instant": 4,
+      "coverage": "100%",
+      "details": [
+        {
+          "transition": 1,
+          "strategy": "gradual",
+          "timing_variation": 0,
+          "intensity_variation": 0
+        },
+        {
+          "transition": 2,
+          "strategy": "gradual",
+          "timing_variation": 0,
+          "intensity_variation": 0
+        },
+        {
+          "transition": 3,
+          "strategy": "instant",
+          "timing_variation": 0,
+          "intensity_variation": 0
+        },
+        {
+          "transition": 4,
+          "strategy": "gradual",
+          "timing_variation": 0,
+          "intensity_variation": 0
+        },
+        {
+          "transition": 5,
+          "strategy": "instant",
+          "timing_variation": 0,
+          "intensity_variation": 0
+        },
+        {
+          "transition": 6,
+          "strategy": "instant",
+          "timing_variation": 0,
+          "intensity_variation": 0
+        },
+        {
+          "transition": 7,
+          "strategy": "instant",
+          "timing_variation": 0,
+          "intensity_variation": 0
+        }
+      ]
+    }
+  },
+  "listening_guide": {
+    "phase1_location": "Last 30 seconds of each track (OUTRO section)",
+    "phase1_what_to_hear": "Incoming track fading in 7-8 seconds before outro ends",
+    "phase2_location": "At exact transition point (where tracks meet)",
+    "phase2_what_to_hear": "Clean bass entry, no muddy overlap",
+    "phase4_location": "Across multiple transitions",
+    "phase4_what_to_hear": "Mix of smooth (gradual) and snappy (instant) transitions"
+  }
+}

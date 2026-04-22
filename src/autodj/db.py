@@ -10,6 +10,7 @@ Per SPEC.md § 2:
 """
 
 import sqlite3
+import json
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -36,6 +37,8 @@ class TrackMetadata:
     title: Optional[str] = None
     artist: Optional[str] = None
     album: Optional[str] = None
+    loops_json: Optional[str] = None  # JSON array of loop regions (NEW - Phase 2026-02-11)
+    vocal_regions_json: Optional[str] = None  # JSON array of vocal regions [[start, end], ...]
 
 
 class Database:
@@ -60,7 +63,9 @@ class Database:
         artist TEXT,
         album TEXT,
         analyzed_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        loops_json TEXT,
+        vocal_regions_json TEXT
     );
 
     -- Playlist history: for repeat decay calculation
@@ -235,8 +240,8 @@ class Database:
             INSERT OR REPLACE INTO tracks (
                 id, file_path, duration_seconds, bpm, key,
                 cue_in_frames, cue_out_frames, loop_start_frames, loop_length_bars,
-                title, artist, album, analyzed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                title, artist, album, analyzed_at, updated_at, loops_json, vocal_regions_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 metadata.track_id,
@@ -253,6 +258,8 @@ class Database:
                 metadata.album,
                 metadata.analyzed_at,
                 datetime.now(timezone.utc).isoformat(),
+                metadata.loops_json,
+                metadata.vocal_regions_json,
             ),
         )
         self.conn.commit()
@@ -291,6 +298,7 @@ class Database:
             title=row["title"],
             artist=row["artist"],
             album=row["album"],
+            loops_json=row["loops_json"] if "loops_json" in row.keys() else None,  # Phase 2026-02-11: Multi-loop support
         )
 
     def get_track_by_path(self, file_path: str) -> Optional[TrackMetadata]:
@@ -374,6 +382,7 @@ class Database:
                 title=row["title"],
                 artist=row["artist"],
                 album=row["album"],
+                loops_json=row["loops_json"] if "loops_json" in row.keys() else None,  # Phase 2026-02-11: Multi-loop support
             )
             for row in rows
         ]
@@ -615,3 +624,81 @@ class Database:
             "tracks_with_cues": tracks_with_cues,
             "bpm_stats": bpm_stats,
         }
+
+    def get_loops_for_track(self, track_id: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve all loop regions for a track.
+
+        Phase 2026-02-11: Multi-loop creative mixing support.
+
+        Args:
+            track_id: Unique track identifier.
+
+        Returns:
+            List of loop region dicts, sorted by start_sec:
+            [
+                {
+                    "start_sec": 10.5,
+                    "end_sec": 26.5,
+                    "length_bars": 16,
+                    "energy": 0.85,
+                    "stability": 0.92,
+                    "label": "drop_loop"
+                },
+                ...
+            ]
+        """
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+
+        cursor.execute("SELECT loops_json FROM tracks WHERE id = ?", (track_id,))
+        row = cursor.fetchone()
+
+        if not row or not row[0]:
+            return []
+
+        try:
+            loops = json.loads(row[0])
+            # Sort by start_sec for intuitive ordering
+            return sorted(loops, key=lambda x: x.get("start_sec", 0))
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Failed to parse loops_json for track {track_id}")
+            return []
+
+    def get_all_loops(self, min_stability: float = 0.7) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Retrieve all loop regions across all tracks with minimum stability threshold.
+
+        Phase 2026-02-11: Multi-loop creative mixing support.
+
+        Useful for:
+        - Finding best loop sections in library
+        - Cross-track loop matching (same stability range)
+        - Remix candidate discovery
+
+        Args:
+            min_stability: Minimum stability score (0.0-1.0) to include.
+
+        Returns:
+            Dictionary mapping track_id → list of loops above threshold.
+        """
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+
+        cursor.execute("SELECT id, loops_json FROM tracks WHERE loops_json IS NOT NULL")
+        rows = cursor.fetchall()
+
+        result = {}
+        for track_id, loops_json in rows:
+            try:
+                loops = json.loads(loops_json)
+                filtered_loops = [
+                    loop for loop in loops
+                    if loop.get("stability", 0.0) >= min_stability
+                ]
+                if filtered_loops:
+                    result[track_id] = sorted(filtered_loops, key=lambda x: x.get("start_sec", 0))
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"Failed to parse loops_json for track {track_id}")
+
+        return result

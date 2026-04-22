@@ -22,6 +22,25 @@ set -euo pipefail
 # ==================== PATH (required for cron) ====================
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
+# ==================== LOGGING FUNCTIONS (define early) ====================
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+die() {
+    local code=$1; shift
+    log "FATAL: $*"
+    exit "$code"
+}
+
+cleanup() {
+    # flock FD is closed automatically when the script exits,
+    # releasing the lock. Nothing else to clean up.
+    :
+}
+trap cleanup EXIT
+
 # ==================== CONFIGURATION ====================
 
 PROJECT_DIR="/home/mcauchy/autodj-headless"
@@ -36,9 +55,28 @@ OUTPUT_FILENAME="autodj-mix-${TODAY}.mp3"
 LOG_FILE="${LOG_DIR}/nightly-${TODAY}.log"
 DRY_RUN="${DRY_RUN:-0}"
 
-# Seed track for playlist generation (Deine Angst - Klangkuenstler)
+# Discord environment variables (for notifications)
+# Load from apple-ripper .env if available, otherwise use provided values
+if [[ -f "/home/mcauchy/apple-ripper/.env" ]]; then
+    APPLE_RIPPER_ENV="/home/mcauchy/apple-ripper/.env"
+    export DISCORD_TOKEN=$(grep "^DISCORD_TOKEN=" "${APPLE_RIPPER_ENV}" | cut -d'=' -f2- | head -1)
+    export DISCORD_CHANNEL_ID=$(grep "^DISCORD_CHANNEL_ID=" "${APPLE_RIPPER_ENV}" | cut -d'=' -f2-)
+    log "Loaded Discord credentials from ${APPLE_RIPPER_ENV}"
+else
+    log "Warning: apple-ripper .env not found, Discord notifications will be disabled"
+fi
+
+# Seed track for playlist generation (random each night for variety)
 # Override via: SEED_TRACK_ID=<id> ./scripts/autodj-nightly.sh
-SEED_TRACK_ID="${SEED_TRACK_ID:-ff5a6be4778892c8}"
+# If not provided, will be set to random track ID from database
+if [ -z "${SEED_TRACK_ID:-}" ]; then
+    # Pick a random seed track to ensure variety each night
+    # This will be populated dynamically based on available tracks
+    SEED_TRACK_ID=""
+    # Note: Empty seed_track_id means MerlinGreedySelector will pick random
+else
+    SEED_TRACK_ID="${SEED_TRACK_ID}"
+fi
 
 # Size bounds for output validation (bytes)
 MIN_SIZE=$((1 * 1024 * 1024))       # 1 MB
@@ -59,13 +97,6 @@ die() {
     log "FATAL: $*"
     exit "$code"
 }
-
-cleanup() {
-    # flock FD is closed automatically when the script exits,
-    # releasing the lock. Nothing else to clean up.
-    :
-}
-trap cleanup EXIT
 
 # ==================== PRE-FLIGHT ====================
 
@@ -125,6 +156,8 @@ log ""
 log "===== Phase 1: Analyze Library ====="
 if ! docker exec \
     -e MUSIC_LIBRARY_PATH=/srv/nas/shared \
+    -e DISCORD_TOKEN="${DISCORD_TOKEN:-}" \
+    -e DISCORD_CHANNEL_ID="${DISCORD_CHANNEL_ID:-}" \
     "${CONTAINER_NAME}" \
     python3 -m src.scripts.analyze_library; then
     die 2 "Phase 1 (analyze) failed"
@@ -153,6 +186,8 @@ log ""
 log "===== Phase 2: Generate Set ====="
 if ! docker exec \
     -e SEED_TRACK_ID="${SEED_TRACK_ID}" \
+    -e DISCORD_TOKEN="${DISCORD_TOKEN:-}" \
+    -e DISCORD_CHANNEL_ID="${DISCORD_CHANNEL_ID:-}" \
     "${CONTAINER_NAME}" \
     python3 -m src.scripts.generate_set; then
     # Notify Discord: Phase 2 Error
@@ -236,10 +271,15 @@ except Exception:
     fi
 fi
 
-# Phase 3: Render
+# Phase 3: Render with Aggressive DJ EQ
 log ""
-log "===== Phase 3: Render Mix ====="
+log "===== Phase 3: Render Mix (with Aggressive DJ EQ) ====="
+EQ_ENABLED="${EQ_ENABLED:-true}"
+log "🎛️ DJ EQ Automation: ${EQ_ENABLED}"
 if ! docker exec \
+    -e EQ_ENABLED="${EQ_ENABLED}" \
+    -e DISCORD_TOKEN="${DISCORD_TOKEN:-}" \
+    -e DISCORD_CHANNEL_ID="${DISCORD_CHANNEL_ID:-}" \
     "${CONTAINER_NAME}" \
     python3 -m src.scripts.render_set; then
     # Notify Discord: Phase 3 Error
@@ -259,6 +299,40 @@ PYTHON_PHASE3_ERROR
 fi
 log "Phase 3 complete."
 
+# 🎛️ Log DJ EQ annotation summary
+log ""
+log "Summarizing DJ EQ Automation..."
+docker exec "${CONTAINER_NAME}" python3 << 'PYTHON_EQ_SUMMARY'
+import sys, os, json, glob
+sys.path.insert(0, '/app')
+try:
+    # Find latest transitions file
+    latest = max(glob.glob('/app/data/playlists/transitions-*.json'), 
+                 key=os.path.getctime, default=None)
+    if latest:
+        with open(latest) as f:
+            plan = json.load(f)
+        
+        eq_count = 0
+        total_skills = 0
+        for idx, trans in enumerate(plan.get('transitions', [])):
+            if 'eq_annotation' in trans:
+                eq_count += 1
+                skills = trans.get('eq_annotation', {}).get('total_eq_skills', 0)
+                bpm = trans.get('eq_annotation', {}).get('detected_bpm', 0)
+                title = trans.get('title', f'Track {idx}')
+                print(f"[INFO] ✅ {title}: {skills} DJ skills @ {bpm:.1f} BPM")
+                total_skills += skills
+        
+        if eq_count > 0:
+            avg = total_skills / eq_count
+            print(f"[INFO] 🎛️ DJ EQ Summary: {eq_count} tracks, {total_skills} total skills ({avg:.1f} avg/track)")
+        else:
+            print(f"[WARNING] No EQ annotations found in transitions")
+except Exception as e:
+    print(f"[ERROR] EQ summary failed: {e}")
+PYTHON_EQ_SUMMARY
+
 # Notify Discord: Phase 3 Complete
 log "Notifying Discord: Phase 3 complete"
 python3 << 'PYTHON_PHASE3_NOTIFY'
@@ -267,8 +341,13 @@ sys.path.insert(0, '/home/mcauchy/autodj-headless')
 try:
     from src.autodj.discord.notifier import DiscordNotifier
     notifier = DiscordNotifier()
+    
+    # Build EQ status
+    eq_status = "✅ DJ EQ ENABLED (15-20 skills/track)" if os.environ.get('EQ_ENABLED', 'true').lower() in ('true', '1') else "⚠️ DJ EQ disabled"
+    
     notifier.post_phase_complete('Render', {
         'Status': 'Mix rendering complete',
+        'DJ EQ': eq_status,
         'Next step': 'Validation'
     })
 except Exception as e:

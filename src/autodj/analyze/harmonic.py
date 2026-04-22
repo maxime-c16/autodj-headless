@@ -26,7 +26,8 @@ Theory:
 
     Key Format: [1-12][A|B]
     - Numbers 1-12: Position on the circle of fifths
-    - A = Major key, B = Minor key
+    - A = Minor key (inner ring), B = Major key (outer ring)
+    - Standard: Mixed In Key "Camelot" notation
 
     Reference: Mixed In Key (Camelot System)
     Reference: Mark Davis Harmonic Mixing Guide
@@ -61,24 +62,22 @@ class CompatibilityLevel(IntEnum):
 
 
 # All valid Camelot keys
-CAMELOT_WHEEL_A_MAJOR = [f"{i}A" for i in range(1, 13)]
-CAMELOT_WHEEL_B_MINOR = [f"{i}B" for i in range(1, 13)]
-CAMELOT_WHEEL = CAMELOT_WHEEL_A_MAJOR + CAMELOT_WHEEL_B_MINOR
+CAMELOT_WHEEL_A_MINOR = [f"{i}A" for i in range(1, 13)]  # A = Minor (inner ring)
+CAMELOT_WHEEL_B_MAJOR = [f"{i}B" for i in range(1, 13)]  # B = Major (outer ring)
+CAMELOT_WHEEL = CAMELOT_WHEEL_A_MINOR + CAMELOT_WHEEL_B_MAJOR
 
-# Camelot number → actual musical key (for reference/display)
+# Camelot number → actual musical key (real Camelot standard: A=minor, B=major)
 CAMELOT_TO_KEY_NAME = {
-    "1A": "Ab Major",   "1B": "F minor",
-    "2A": "Eb Major",   "2B": "C minor",
-    "3A": "Bb Major",   "3B": "G minor",
-    "4A": "F Major",    "4B": "D minor",
-    "5A": "C Major",    "5B": "A minor",
-    "6A": "G Major",    "6B": "E minor",
-    "7A": "D Major",    "7B": "B minor",
-    "8A": "A Major",    "8B": "F# minor",
-    "9A": "E Major",    "9B": "C# minor",
-    "10A": "B Major",   "10B": "G# minor",
-    "11A": "F# Major",  "11B": "D# minor",
-    "12A": "Db Major",  "12B": "Bb minor",
+    # Minor keys (A suffix = inner ring)
+    "1A": "Ab minor",   "2A": "Eb minor",   "3A": "Bb minor",
+    "4A": "F minor",    "5A": "C minor",    "6A": "G minor",
+    "7A": "D minor",    "8A": "A minor",    "9A": "E minor",
+    "10A": "B minor",   "11A": "F# minor",  "12A": "Db minor",
+    # Major keys (B suffix = outer ring)
+    "1B": "B major",    "2B": "F# major",   "3B": "Db major",
+    "4B": "Ab major",   "5B": "Eb major",   "6B": "Bb major",
+    "7B": "F major",    "8B": "C major",    "9B": "G major",
+    "10B": "D major",   "11B": "A major",   "12B": "E major",
 }
 
 # Standard key name → Camelot (for conversion from key detection)
@@ -116,7 +115,7 @@ class Transition:
     compatibility_level: CompatibilityLevel
     compatibility_score: float
     technique: str
-    semitone_distance: int
+    wheel_distance: int   # Camelot wheel position distance, not semitone distance
 
 
 # ============================================================================
@@ -159,13 +158,14 @@ def calculate_wheel_distance(key1: str, key2: str) -> int:
     return min(raw_diff, 12 - raw_diff)
 
 
-def calculate_semitone_distance(key1: str, key2: str) -> int:
+def calculate_wheel_distance_from_keys(key1: str, key2: str) -> int:
     """
     Calculate Camelot wheel distance between two keys.
 
-    This function uses wheel position distance (not actual semitone distance)
-    because the Camelot system is designed so that adjacent positions
-    are harmonically compatible for DJ mixing.
+    Renamed from calculate_semitone_distance — computes Camelot wheel position
+    distance (not actual semitone distance). Uses wheel position distance because
+    the Camelot system is designed so adjacent positions are harmonically
+    compatible for DJ mixing.
 
     For cross-mode transitions (A↔B), we use the wheel distance
     of the numbers, which correctly captures the harmonic relationship.
@@ -195,6 +195,10 @@ def calculate_semitone_distance(key1: str, key2: str) -> int:
 
     # Mode switch adds 1 unit of distance (relative major/minor is close)
     return wheel_dist + 1 if wheel_dist > 0 else 1
+
+
+# Backward-compatible alias (tests and callers import this name)
+calculate_semitone_distance = calculate_wheel_distance_from_keys
 
 
 def determine_compatibility(
@@ -429,7 +433,7 @@ class HarmonicMixer:
                 compatibility_level=compat_level,
                 compatibility_score=score,
                 technique=technique,
-                semitone_distance=distance,
+                wheel_distance=distance,
             )
             transitions.append(transition)
 

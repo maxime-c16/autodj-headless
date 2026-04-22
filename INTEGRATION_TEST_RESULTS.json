@@ -1,0 +1,8 @@
+{
+  "test_passed": true,
+  "total_transitions": 20,
+  "valid_transitions": 20,
+  "phase2_bass_cuts": 20,
+  "phase4_gradual": 13,
+  "phase4_instant": 7
+}

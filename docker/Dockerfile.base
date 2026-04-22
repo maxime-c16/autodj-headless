@@ -21,28 +21,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11-venv \
     python3-pip \
     \
-    # FFmpeg and audio processing
-    ffmpeg \
-    libavcodec-dev \
-    libavformat-dev \
-    libswresample-dev \
-    \
     # Aubio (BPM detection)
     libaubio-dev \
     libaubio-doc \
-    \
-    # Key detection: essentia will be installed via pip
-    # (keyfinder-cli to be compiled from source if needed)
     \
     # LADSPA plugins for DSP/EQ
     ladspa-sdk \
     cmt \
     \
-    # Liquidsoap dependencies
+    # Liquidsoap build dependencies (OCaml ecosystem)
     libocamlnet-ocaml \
     libocamlnet-ocaml-dev \
     ocaml \
     ocaml-findlib \
+    opam \
+    m4 \
     \
     # SQLite
     sqlite3 \
@@ -57,18 +50,55 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Cleanup
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Liquidsoap 2.2.x (headless, no GUI)
-# Note: liquidsoap-plugin-all not available in Debian 12; comes with base package
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    liquidsoap \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install Liquidsoap 2.2+ from Ubuntu Jammy
+# CRITICAL: Liquidsoap 2.2.4 is compiled against Ubuntu 22.04's FFmpeg 4.4.2 (with libav*58)
+# We must use the EXACT same FFmpeg libraries from Ubuntu 22.04
+RUN echo "deb http://archive.ubuntu.com/ubuntu jammy main universe multiverse" >> /etc/apt/sources.list.d/ubuntu-jammy.list && \
+    apt-get update && \
+    # Install Liquidsoap first (this will fail if FFmpeg libs not found)
+    apt-get install -y --no-install-recommends \
+    liquidsoap=2.2.4-1~ubuntu22.04 \
+    liquidsoap-plugin-all=2.2.4-1~ubuntu22.04 \
+    ffmpeg=7:4.4.2-0ubuntu0.22.04.1 \
+    libavcodec58=7:4.4.2-0ubuntu0.22.04.1 \
+    libavformat58=7:4.4.2-0ubuntu0.22.04.1 \
+    libavdevice58=7:4.4.2-0ubuntu0.22.04.1 \
+    libavutil56=7:4.4.2-0ubuntu0.22.04.1 \
+    libswscale5=7:4.4.2-0ubuntu0.22.04.1 \
+    libswresample3=7:4.4.2-0ubuntu0.22.04.1 \
+    libavfilter7=7:4.4.2-0ubuntu0.22.04.1 \
+    2>&1 | grep -E "Setting|unpacking|done" || true && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    ldconfig && \
+    echo "✅ Liquidsoap $(liquidsoap --version 2>/dev/null | head -1) installed with FFmpeg 4.4.2"
 
-# Optional: keyfinder-cli can be installed manually if available in system
-# For now, essentia (installed via pip below) is the primary key detector
+# Fallback: If Ubuntu packages fail, try building from source (optional, slow)
+# This ensures we always have 2.2+ available
+RUN liquidsoap_version=$(liquidsoap --version 2>/dev/null | head -1) && \
+    if ! echo "$liquidsoap_version" | grep -qE "Liquidsoap 2\.[234]"; then \
+      echo "Warning: Liquidsoap version is older than 2.2, attempting to upgrade..."; \
+      echo "Current version: $liquidsoap_version"; \
+      echo "Building Liquidsoap 2.4 from source (this may take 10+ minutes)..."; \
+      apt-get update && apt-get install -y --no-install-recommends \
+        libfdk-aac-dev libmp3lame-dev libopus-dev libvorbis-dev libflac-dev \
+        libtag1-dev libmad0-dev libsndfile1-dev libjack-dev libpulse-dev && \
+      cd /tmp && git clone https://github.com/savonet/liquidsoap.git && \
+      cd liquidsoap && git checkout main && \
+      ./bootstrap && ./configure --enable-all && make install && \
+      ldconfig && \
+      cd / && rm -rf /tmp/liquidsoap; \
+    else \
+      echo "Liquidsoap version OK: $liquidsoap_version"; \
+    fi
 
-# Verify Liquidsoap version is 2.2.x
-RUN liquidsoap --version | grep -q "2.2" || \
-    (echo "ERROR: Liquidsoap version is not 2.2.x" && exit 1)
+# Verify Liquidsoap version is 2.2+ (supports full EQ API)
+RUN liquidsoap_ver=$(liquidsoap --version | grep -oE "2\.[0-9]") && \
+    if ! echo "$liquidsoap_ver" | grep -qE "2\.[234]"; then \
+      echo "ERROR: Liquidsoap version must be 2.2+ for EQ automation support"; \
+      echo "Got: $liquidsoap_ver"; \
+      exit 1; \
+    fi && \
+    echo "✅ Liquidsoap $(liquidsoap --version | head -1) is ready for EQ filters"
 
 # Set up Python 3.11 as default
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
@@ -89,24 +119,31 @@ RUN pip install --no-cache-dir --upgrade --break-system-packages \
     wheel
 
 RUN pip install --no-cache-dir --break-system-packages \
-    # Core scientific stack (minimal for MIR)
-    'numpy>=1.24,<1.25' \
-    'scipy>=1.10,<1.11' \
+    # Core scientific stack (latest stable)
+    'numpy>=1.26,<2.0' \
+    'scipy>=1.11,<1.13' \
+    'scikit-learn>=1.3,<1.5' \
     \
-    # Audio analysis
+    # Audio analysis & processing
     'aubio>=0.4.9' \
-    'essentia>=2.1b5' \
-    'mutagen>=1.46' \
+    'essentia>=2.1b6' \
+    'mutagen>=1.47' \
     'audioread>=3.1' \
     'librosa>=0.10' \
     'soundfile>=0.12' \
+    'pydub>=0.25' \
     \
-    # Configuration
+    # DSP and filters
+    'scipy>=1.11' \
+    \
+    # Configuration & utilities
     'toml>=0.10' \
-    \
-    # Utilities
     'python-dateutil>=2.8' \
-    'pytz>=2023.3'
+    'pytz>=2024.1' \
+    'requests>=2.31' \
+    \
+    # JSON & data handling
+    'jsonschema>=4.20'
 
 # Create non-root user (optional, but good practice)
 RUN useradd -m -u 1000 autodj && \

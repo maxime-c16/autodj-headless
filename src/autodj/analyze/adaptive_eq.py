@@ -675,6 +675,9 @@ def generate_liquidsoap_eq(
     Generates filter.iir.eq.low_shelf, filter.iir.eq.peaking,
     and filter.iir.eq.high_shelf calls compatible with Liquidsoap 2.2+.
 
+    Uses the Audio EQ Cookbook (Bristow-Johnson) filter design with
+    Liquidsoap's native 3-band EQ implementation.
+
     Args:
         profile: Adaptive EQ profile
         variable_name: Liquidsoap variable name for the source
@@ -684,38 +687,42 @@ def generate_liquidsoap_eq(
     """
     lines = [
         f"# Adaptive EQ for {variable_name}",
-        f"# Bass: {profile.low.gain_db:+.1f}dB @ {profile.low.frequency}Hz",
-        f"# Mid:  {profile.mid.gain_db:+.1f}dB @ {profile.mid.frequency}Hz",
-        f"# High: {profile.high.gain_db:+.1f}dB @ {profile.high.frequency}Hz",
+        f"# Bass: {profile.low.gain_db:+.1f}dB @ {profile.low.frequency}Hz (Q={profile.low.q:.3f})",
+        f"# Mid:  {profile.mid.gain_db:+.1f}dB @ {profile.mid.frequency}Hz (Q={profile.mid.q:.3f})",
+        f"# High: {profile.high.gain_db:+.1f}dB @ {profile.high.frequency}Hz (Q={profile.high.q:.3f})",
     ]
 
+    # Apply low-shelf filter if gain is significant
     if abs(profile.low.gain_db) > 0.1:
         lines.append(
             f'{variable_name} = filter.iir.eq.low_shelf('
-            f'frequency={profile.low.frequency}, '
-            f'gain={profile.low.gain_db}, '
+            f'frequency={profile.low.frequency:.1f}, '
+            f'gain={profile.low.gain_db:.1f}, '
             f'q={profile.low.q:.3f}, '
             f'{variable_name})'
         )
 
+    # Apply mid peaking filter if gain is significant
     if abs(profile.mid.gain_db) > 0.1:
         lines.append(
-            f'{variable_name} = filter.iir.eq.peak('
-            f'frequency={profile.mid.frequency}, '
-            f'gain={profile.mid.gain_db}, '
+            f'{variable_name} = filter.iir.eq.peaking('
+            f'frequency={profile.mid.frequency:.1f}, '
+            f'gain={profile.mid.gain_db:.1f}, '
             f'q={profile.mid.q:.3f}, '
             f'{variable_name})'
         )
 
+    # Apply high-shelf filter if gain is significant
     if abs(profile.high.gain_db) > 0.1:
         lines.append(
             f'{variable_name} = filter.iir.eq.high_shelf('
-            f'frequency={profile.high.frequency}, '
-            f'gain={profile.high.gain_db}, '
+            f'frequency={profile.high.frequency:.1f}, '
+            f'gain={profile.high.gain_db:.1f}, '
             f'q={profile.high.q:.3f}, '
             f'{variable_name})'
         )
 
+    # Apply master gain if needed
     if abs(profile.overall_gain_db) > 0.1:
         linear_gain = 10.0 ** (profile.overall_gain_db / 20.0)
         lines.append(

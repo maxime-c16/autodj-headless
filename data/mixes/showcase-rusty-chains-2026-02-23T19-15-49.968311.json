@@ -1,0 +1,18 @@
+{
+  "album": "Rusty Chains by \u00d8RGIE",
+  "artist": "\u00d8RGIE",
+  "duration_minutes": 23.0,
+  "duration_seconds": 1380,
+  "bpm": 128.0,
+  "total_bars": 704,
+  "format": "mp3",
+  "bitrate_kbps": 320,
+  "sample_rate": 48000,
+  "channels": 2,
+  "timestamp": "2026-02-23T19-15-49.968311",
+  "phase5_enabled": true,
+  "phase5_version": "5.0",
+  "techniques_applied": 21,
+  "glitch_prevention": "active",
+  "audio_safety": "guaranteed"
+}

@@ -12,6 +12,7 @@ import numpy as np
 import tempfile
 from pathlib import Path
 import json
+import logging
 
 from src.autodj.analyze.spectral import (
     SmartCues,
@@ -93,10 +94,38 @@ def synthetic_energy_peaks():
         0.3 * np.exp(-((time - 2) ** 2) / 0.5) +      # Peak 1 at t=2
         0.4 * np.exp(-((time - 5) ** 2) / 0.5) +      # Peak 2 at t=5
         0.5 * np.exp(-((time - 8) ** 2) / 0.5) +      # Peak 3 at t=8
-        0.1 * np.random.randn(1000)                    # Noise
+        0.1 * np.random.default_rng(42).standard_normal(1000)  # Seeded, deterministic
     )
     energy = np.clip(energy, 0, 1)
     return energy
+
+
+@pytest.fixture
+def synthetic_stereo_wav(tmp_path):
+    """Generate stereo WAV to test stereo-to-mono downmix."""
+    import scipy.io.wavfile as wavfile
+
+    sr = 44100
+    t = np.linspace(0, 2, sr * 2, dtype=np.float32)
+    left = 0.5 * np.sin(2 * np.pi * 440 * t)
+    right = 0.5 * np.sin(2 * np.pi * 880 * t)
+    stereo = (np.column_stack([left, right]) * 32767).astype(np.int16)
+    wav_path = tmp_path / "stereo.wav"
+    wavfile.write(str(wav_path), sr, stereo)
+    return str(wav_path)
+
+
+@pytest.fixture
+def synthetic_48k_wav(tmp_path):
+    """Generate 48kHz WAV to test sample rate warning."""
+    import scipy.io.wavfile as wavfile
+
+    sr = 48000
+    t = np.linspace(0, 1, sr, dtype=np.float32)
+    audio = (0.3 * np.sin(2 * np.pi * 440 * t) * 32767).astype(np.int16)
+    path = tmp_path / "audio_48k.wav"
+    wavfile.write(str(path), sr, audio)
+    return str(path)
 
 
 # ============================================================================
@@ -122,6 +151,25 @@ class TestAudioLoading:
         """Audio is normalized to float."""
         audio, _ = load_audio(synthetic_audio_wav)
         assert audio.dtype in [np.float32, np.float64]
+
+
+class TestStereoLoading:
+    """Test stereo WAV downmix to mono."""
+
+    def test_stereo_downmixed_to_mono(self, synthetic_stereo_wav):
+        audio, sr = load_audio(synthetic_stereo_wav)
+        assert audio.ndim == 1, "Stereo should be downmixed to mono"
+        assert audio.dtype == np.float32
+        assert -1.0 <= audio.min() and audio.max() <= 1.0
+
+
+def test_non_standard_sample_rate_loads_with_warning(synthetic_48k_wav, caplog):
+    """Non-44100Hz WAV should load but log a warning."""
+    with caplog.at_level(logging.WARNING):
+        audio, sr = load_audio(synthetic_48k_wav)
+    assert sr == 48000
+    assert audio.dtype == np.float32
+    assert any("SR" in r.message or "44100" in r.message for r in caplog.records)
 
 
 # ============================================================================
@@ -278,13 +326,17 @@ class TestSpectralCharacteristics:
     def test_kick_detection_on_kickdrum_audio(self, synthetic_audio_wav):
         """Detect kick in kick drum audio."""
         spec = spectral_characteristics(synthetic_audio_wav)
-        # Synthetic audio has strong 80Hz kick
-        assert spec.kick_detected or spec.bass_energy > 0.15
-    
+        # Synthetic audio has strong 80Hz kick — must be detected
+        assert spec.kick_detected, (
+            f"Expected kick detected in kick drum audio, bass_energy={spec.bass_energy:.3f}"
+        )
+
     def test_quiet_audio_no_kick(self, synthetic_quiet_audio_wav):
         """No kick detected in quiet audio."""
         spec = spectral_characteristics(synthetic_quiet_audio_wav)
-        assert not spec.kick_detected or spec.bass_energy < 0.15
+        assert not spec.kick_detected, (
+            f"No kick expected in quiet audio, bass_energy={spec.bass_energy:.3f}"
+        )
 
 
 # ============================================================================

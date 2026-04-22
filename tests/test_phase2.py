@@ -18,10 +18,13 @@ from src.autodj.analyze.harmonic import (
     Transition,
     CompatibilityLevel,
     calculate_semitone_distance,
+    calculate_wheel_distance,
     determine_compatibility,
     suggest_mixing_technique,
     parse_camelot_key,
     CAMELOT_WHEEL,
+    CAMELOT_TO_KEY_NAME,
+    KEY_NAME_TO_CAMELOT,
 )
 
 
@@ -52,7 +55,7 @@ def populated_mixer():
 # TEST: Key Parsing
 # ============================================================================
 
-class TestParseCalelotKey:
+class TestParseCamelotKey:
     """Test Camelot key string parsing."""
     
     def test_parse_valid_major_keys(self):
@@ -124,6 +127,33 @@ class TestCalculateSemitoneDistance:
 
 
 # ============================================================================
+# TEST: Wheel Distance Calculation
+# ============================================================================
+
+class TestCalculateWheelDistance:
+    """Tests for calculate_wheel_distance() function."""
+
+    def test_same_key_zero_distance(self):
+        assert calculate_wheel_distance("8B", "8B") == 0
+
+    def test_adjacent_same_mode(self):
+        assert calculate_wheel_distance("8B", "9B") == 1
+        assert calculate_wheel_distance("8B", "7B") == 1
+
+    def test_wraparound_at_12(self):
+        # 12 and 1 are adjacent on the wheel
+        assert calculate_wheel_distance("12B", "1B") == 1
+
+    def test_opposite_side(self):
+        # Maximum distance is 6
+        assert calculate_wheel_distance("1B", "7B") == 6
+
+    def test_cross_mode_ignored(self):
+        # calculate_wheel_distance() ignores mode (only compares numbers)
+        assert calculate_wheel_distance("8A", "9B") == 1
+
+
+# ============================================================================
 # TEST: Compatibility Determination
 # ============================================================================
 
@@ -160,6 +190,25 @@ class TestDetermineCompatibility:
         level, score = determine_compatibility("1A", "5A")
         assert level == CompatibilityLevel.POOR
         assert score <= 1.5
+
+    def test_incompatible_compatibility(self):
+        """Wheel distance >= 5 returns INCOMPATIBLE."""
+        level, score = determine_compatibility("1B", "6B")  # distance 5
+        assert level == CompatibilityLevel.INCOMPATIBLE
+        assert score == 0.0
+
+    def test_opposite_is_incompatible(self):
+        """Wheel distance 6 (opposite side) is INCOMPATIBLE."""
+        level, score = determine_compatibility("1B", "7B")  # distance 6
+        assert level == CompatibilityLevel.INCOMPATIBLE
+        assert score == 0.0
+
+    def test_key_name_lookup(self):
+        """Test CAMELOT_TO_KEY_NAME uses real Camelot standard (A=minor, B=major)."""
+        assert CAMELOT_TO_KEY_NAME["8B"] == "C major"
+        assert CAMELOT_TO_KEY_NAME["8A"] == "A minor"
+        assert CAMELOT_TO_KEY_NAME["1A"] == "Ab minor"
+        assert KEY_NAME_TO_CAMELOT["C major"] == "8B"
 
 
 # ============================================================================
@@ -354,7 +403,7 @@ class TestTransitions:
             assert hasattr(t, "compatibility_level")
             assert hasattr(t, "compatibility_score")
             assert hasattr(t, "technique")
-            assert hasattr(t, "semitone_distance")
+            assert hasattr(t, "wheel_distance")
 
 
 # ============================================================================

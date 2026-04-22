@@ -1,0 +1,123 @@
+{
+  "title": "SHOWCASE: Loop Features Demo",
+  "date": "2026-02-12T09:57:19.943546",
+  "duration_minutes": 9.5,
+  "features_showcased": [
+    "Loop Progression",
+    "Loop Swapping",
+    "Breakdown Bridging",
+    "Loop Filtering"
+  ],
+  "sections": [
+    {
+      "name": "Progressive Loop Build",
+      "technique": "Loop Progression",
+      "duration_bars": 40,
+      "progression": [
+        {
+          "step": 1,
+          "loop_type": "breakdown_loop",
+          "duration_bars": 4,
+          "energy_level": "low-to-mid"
+        },
+        {
+          "step": 2,
+          "loop_type": "drop_loop",
+          "duration_bars": 16,
+          "energy_level": "high"
+        }
+      ]
+    },
+    {
+      "name": "Rapid Loop Swaps",
+      "technique": "Loop Swapping",
+      "duration_bars": 48,
+      "swaps": [
+        {
+          "track": "Blood On My Hands",
+          "loop_type": "breakdown_loop",
+          "duration_bars": 4,
+          "entry_point": "Bar 10"
+        },
+        {
+          "track": "Blood On My Hands",
+          "loop_type": "breakdown_loop",
+          "duration_bars": 8,
+          "entry_point": "Bar 16"
+        },
+        {
+          "track": "Blood On My Hands",
+          "loop_type": "drop_loop",
+          "duration_bars": 16,
+          "entry_point": "Bar 32"
+        },
+        {
+          "track": "Never Enough",
+          "loop_type": "drop_loop",
+          "duration_bars": 16,
+          "entry_point": "Bar 17"
+        },
+        {
+          "track": "Never Enough",
+          "loop_type": "breakdown_loop",
+          "duration_bars": 8,
+          "entry_point": "Bar 64"
+        },
+        {
+          "track": "Never Enough",
+          "loop_type": "drop_loop",
+          "duration_bars": 8,
+          "entry_point": "Bar 80"
+        }
+      ]
+    },
+    {
+      "name": "Breakdown Bridge Transitions",
+      "technique": "Breakdown Bridging",
+      "duration_bars": 32,
+      "bridges": [
+        {
+          "track": "Blood On My Hands",
+          "duration_bars": 4,
+          "stability": 0.0314
+        },
+        {
+          "track": "Blood On My Hands",
+          "duration_bars": 8,
+          "stability": 0.0
+        },
+        {
+          "track": "Blood On My Hands",
+          "duration_bars": 8,
+          "stability": 0.0
+        }
+      ]
+    },
+    {
+      "name": "Filtered Loop Effects",
+      "technique": "Loop Filtering",
+      "duration_bars": 32,
+      "effects": [
+        {
+          "name": "HPF Sweep Filter-In",
+          "description": "High-pass filter sweep from 0-5kHz",
+          "duration_bars": 8,
+          "starting_frequency": "0 Hz",
+          "ending_frequency": "5000 Hz"
+        },
+        {
+          "name": "Loop Hold",
+          "description": "Hold outgoing loop, bring in incoming",
+          "duration_bars": 8
+        },
+        {
+          "name": "LPF Sweep Filter-Out",
+          "description": "Low-pass filter sweep from 20kHz to 200Hz",
+          "duration_bars": 8,
+          "starting_frequency": "20000 Hz",
+          "ending_frequency": "200 Hz"
+        }
+      ]
+    }
+  ]
+}

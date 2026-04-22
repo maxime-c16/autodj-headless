@@ -18,6 +18,7 @@ from datetime import datetime
 import hashlib
 import os
 import gc
+import json
 
 # Add src/ to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -312,8 +313,20 @@ def analyze_track(
         # Detect BPM
         logger.debug("  → Detecting BPM...")
         bpm = detect_bpm(str(file_path), config["analysis"])
+        
+        # ISSUE #1 FIX: Fallback instead of skip when BPM detection fails
+        bpm_confidence_low = False
         if not bpm:
-            logger.warning("  ✗ BPM detection failed")
+            logger.warning("  ⚠️  BPM detection failed, using fallback")
+            bpm = 120.0  # Fallback to 120 BPM (standard DJ tempo)
+            bpm_confidence_low = True  # Mark for manual review
+        else:
+            logger.info(f"✅ BPM detected: {bpm:.1f} BPM")
+
+        # HARD LIMIT: Skip tracks below 110 BPM
+        min_bpm = config["constraints"].get("min_bpm", 110)
+        if bpm < min_bpm:
+            logger.warning(f"Track BPM too low ({bpm:.1f} < {min_bpm}), skipping")
             return False, None
 
         # Detect key
@@ -362,10 +375,13 @@ def analyze_track(
             title=title,
             artist=artist,
             album=album,
+            loops_json=None,  # Will be populated after structure analysis (Phase 2026-02-11)
+            vocal_regions_json=None,  # Will be populated after structure analysis (Phase 2026-02-12)
         )
-
-        # Write to database
-        db.add_track(metadata)
+        
+        # Log BPM status with clarity for manual review
+        if bpm_confidence_low:
+            logger.info(f"  ℹ️  BPM set to fallback value {bpm:.1f} - NEEDS MANUAL VERIFICATION")
 
         # Phase 5: Rich structure analysis (MANDATORY for Pro DJ v2)
         analysis_dict = None
@@ -431,6 +447,7 @@ def analyze_track(
                 db.save_track_analysis(track_id, analysis_dict)
 
                 # Update cue_in/cue_out to use semantic cues (if available)
+                # Also extract loop regions and store as JSON (Phase 2026-02-11)
                 if structure:
                     mix_in = next((c for c in structure.cue_points if c.label == "mix_in"), None)
                     mix_out = next((c for c in structure.cue_points if c.label == "mix_out"), None)
@@ -438,8 +455,35 @@ def analyze_track(
                         metadata.cue_in_frames = int(mix_in.position_seconds * 44100)
                     if mix_out:
                         metadata.cue_out_frames = int(mix_out.position_seconds * 44100)
-                    if mix_in or mix_out:
-                        db.add_track(metadata)
+                    
+                    # Extract loop regions as JSON (NEW - Phase 2026-02-11)
+                    if structure.loop_regions:
+                        loops_list = []
+                        for loop in structure.loop_regions:
+                            loop_dict = {
+                                "start_sec": round(loop.start_seconds, 3),
+                                "end_sec": round(loop.end_seconds, 3),
+                                "length_bars": loop.length_bars,
+                                "energy": round(loop.energy, 3),
+                                "stability": round(loop.stability, 4),
+                                "label": loop.label,
+                                "vocal_prominence": round(loop.vocal_prominence, 3),  # Phase 2: NEW
+                            }
+                            loops_list.append(loop_dict)
+                        metadata.loops_json = json.dumps(loops_list)
+                        logger.debug(f"  ✓ Extracted {len(loops_list)} loop regions: {', '.join([l['label'] for l in loops_list])}")
+                    
+                    # Extract and store vocal regions (Phase 2026-02-12)
+                    if structure.vocal_regions:
+                        vocal_regions_list = [
+                            [round(start, 3), round(end, 3)]
+                            for start, end in structure.vocal_regions
+                        ]
+                        metadata.vocal_regions_json = json.dumps(vocal_regions_list)
+                        logger.debug(f"  ✓ Extracted {len(vocal_regions_list)} vocal regions: {vocal_regions_list}")
+                    
+                    # Always update metadata with semantic cues and loops
+                    db.add_track(metadata)
 
                 logger.info(f"  ✅ Structure: {len(structure.sections)} sections, kick={structure.kick_pattern}")
             except Exception as e:
@@ -449,6 +493,8 @@ def analyze_track(
                 audio_cache.clear()
         else:
             logger.warning(f"  ⚠️  No structure data saved (structure analysis failed)")
+            # Still write basic metadata even if structure analysis failed
+            db.add_track(metadata)
             # Still clear cache even if structure analysis failed
             audio_cache.clear()
 

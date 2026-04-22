@@ -1,0 +1,62 @@
+time="2026-02-11T18:17:15+01:00" level=warning msg="/home/mcauchy/autodj-headless/docker/compose.dev.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+Resolving tracks...
+  Matched: 6EJOU — Blood On My Hands (GUS & JORG Remix) (157.8 BPM, 7A)
+  (also found: Blood On My Hands)
+
+Quick Mix: 7 tracks
+============================================================
+  1. 6EJOU — Blood On My Hands (GUS & JORG Remix)
+     157.8 BPM | 7A | 5.8 min
+  2. N00M1 — Addicted To Acid
+     157.6 BPM | 7B | 3.7 min
+  3. Klangkuenstler — Toter Schmetterling (feat. Sant) [Single Edit]
+     159.1 BPM | 8A | 2.7 min
+  4. La Bouche & Bollmann — Be My Lover (feat. Bandido) / Rampage (Mixed)
+     156.0 BPM | 7A | 2.3 min
+  5. VCL — Better Than Yours (Mixed)
+     155.3 BPM | 7B | 5.0 min
+  6. EARGASM GOD — Elements 2 (Mixed)
+     155.2 BPM | 8A | 3.2 min
+  7. Juul Exler — Lost Echoes
+     161.0 BPM | 7B | 4.7 min
+
+Generating transitions...
+[Discord] ⚠️  Notifier disabled (missing TOKEN or CHANNEL_ID)
+
+Transition Plan:
+======================================================================
+  1. Blood On My Hands (GUS & JORG Remix)
+     157.8 -> 157.7 BPM | xfade 48.7s
+     --> [LOOP HOLD (hold groove, blend in)] (32 bars)
+  2. Addicted To Acid
+     157.6 -> 158.4 BPM | xfade 6.1s
+     --> [DROP SWAP (slam at drop!)] (4 bars)
+  3. Toter Schmetterling (feat. Sant) [Single Edit]
+     159.1 -> 157.6 BPM | xfade 48.3s
+     --> [LOOP HOLD (hold groove, blend in)] (32 bars)
+  4. Be My Lover (feat. Bandido) / Rampage (Mixed)
+     156.0 -> 155.6 BPM | xfade 49.2s
+     --> [EQ BLEND (long smooth 32-bar)] (32 bars)
+  5. Better Than Yours (Mixed)
+     155.3 -> 155.2 BPM | xfade 6.2s
+     --> [DROP SWAP (slam at drop!)] (4 bars)
+  6. Elements 2 (Mixed)
+     155.2 -> 158.1 BPM | xfade 24.7s
+     --> [LOOP ROLL (8->4->2->1 tighten)] (16 bars)
+  7. Lost Echoes
+     161.0 -> 161.0 BPM | xfade 11.9s
+======================================================================
+
+Transition Type Distribution:
+  🔉 BASS_SWAP        1x ( 14%)
+  🔁 LOOP_HOLD        2x ( 29%)
+  💥 DROP_SWAP        2x ( 29%)
+  ⚙️ LOOP_ROLL        1x ( 14%)
+  🎚️ EQ_BLEND         1x ( 14%)
+
+Rendering to /app/data/mixes/quick-mix-20260211-171715.mp3...
+
+SUCCESS!
+  Output: /app/data/mixes/quick-mix-20260211-171715.mp3
+  Size:   46.8 MB
+  Time:   164s

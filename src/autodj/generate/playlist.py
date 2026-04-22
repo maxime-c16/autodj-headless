@@ -22,7 +22,28 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
-from .selector import MerlinGreedySelector, SelectionConstraints
+from .selector import MerlinGreedySelector, BlastxcssSelector, SelectionConstraints
+from .personas import DJPersona, get_persona_config, get_persona_by_name
+
+# DJ Techniques Phases (research-backed professional mixing)
+try:
+    from ..render.phase1_early_transitions import (
+        EarlyTransitionCalculator,
+        enhance_transition_plan_with_early_timing,
+    )
+    from ..render.phase2_bass_cut import (
+        BassCutEngine,
+        enhance_transition_with_bass_cut,
+    )
+    from ..render.phase4_variation import (
+        DynamicVariationEngine,
+        VariationParams,
+        enhance_transitions_with_variation,
+    )
+    DJ_TECHNIQUES_AVAILABLE = True
+except ImportError:
+    DJ_TECHNIQUES_AVAILABLE = False
+    logger.warning("DJ Techniques modules not available - playlist will use basic mixing")
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +116,19 @@ class TransitionPlan:
         hpf_frequency: float = 200.0,
         lpf_frequency: float = 2500.0,
         bpm_ramp_strategy: str = "no_ramp",
+        # DJ Techniques Phases (optional, added during generation)
+        phase1_early_start_enabled: bool = False,
+        phase1_transition_start_seconds: Optional[float] = None,
+        phase1_transition_end_seconds: Optional[float] = None,
+        phase1_transition_bars: int = 16,
+        phase2_bass_cut_enabled: bool = False,
+        phase2_hpf_frequency: float = 200.0,
+        phase2_cut_intensity: float = 0.65,
+        phase2_strategy: str = "instant",
+        phase4_strategy: str = "instant",
+        phase4_timing_variation_bars: float = 0.0,
+        phase4_intensity_variation: float = 0.65,
+        phase4_skip_bass_cut: bool = False,
     ):
         """
         Args:
@@ -158,6 +192,21 @@ class TransitionPlan:
         self.hpf_frequency = hpf_frequency
         self.lpf_frequency = lpf_frequency
         self.bpm_ramp_strategy = bpm_ramp_strategy
+        self.eq_annotation = None  # EQ opportunities, populated during rendering
+        
+        # DJ Techniques Phases (added during generation)
+        self.phase1_early_start_enabled = phase1_early_start_enabled
+        self.phase1_transition_start_seconds = phase1_transition_start_seconds
+        self.phase1_transition_end_seconds = phase1_transition_end_seconds
+        self.phase1_transition_bars = phase1_transition_bars
+        self.phase2_bass_cut_enabled = phase2_bass_cut_enabled
+        self.phase2_hpf_frequency = phase2_hpf_frequency
+        self.phase2_cut_intensity = phase2_cut_intensity
+        self.phase2_strategy = phase2_strategy
+        self.phase4_strategy = phase4_strategy
+        self.phase4_timing_variation_bars = phase4_timing_variation_bars
+        self.phase4_intensity_variation = phase4_intensity_variation
+        self.phase4_skip_bass_cut = phase4_skip_bass_cut
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -202,6 +251,28 @@ class TransitionPlan:
             d["roll_stages"] = self.roll_stages
         if self.bpm_ramp_strategy != "no_ramp":
             d["bpm_ramp_strategy"] = self.bpm_ramp_strategy
+        if self.eq_annotation is not None:
+            d["eq_annotation"] = self.eq_annotation
+        
+        # DJ Techniques Phases (Phase 1 - always include if computed)
+        if self.phase1_early_start_enabled is not None:
+            d["phase1_early_start_enabled"] = self.phase1_early_start_enabled
+            d["phase1_transition_start_seconds"] = self.phase1_transition_start_seconds
+            d["phase1_transition_end_seconds"] = self.phase1_transition_end_seconds
+            d["phase1_transition_bars"] = self.phase1_transition_bars if self.phase1_transition_bars else 16
+        
+        if self.phase2_bass_cut_enabled is not None:
+            d["phase2_bass_cut_enabled"] = self.phase2_bass_cut_enabled
+            d["phase2_hpf_frequency"] = self.phase2_hpf_frequency if self.phase2_hpf_frequency else 200.0
+            d["phase2_cut_intensity"] = self.phase2_cut_intensity if self.phase2_cut_intensity else 0.65
+            d["phase2_strategy"] = self.phase2_strategy if self.phase2_strategy else "instant"
+        
+        if self.phase4_strategy is not None:
+            d["phase4_strategy"] = self.phase4_strategy
+            d["phase4_timing_variation_bars"] = self.phase4_timing_variation_bars if self.phase4_timing_variation_bars else 0.0
+            d["phase4_intensity_variation"] = self.phase4_intensity_variation if self.phase4_intensity_variation else 0.65
+            d["phase4_skip_bass_cut"] = self.phase4_skip_bass_cut if self.phase4_skip_bass_cut is not None else False
+        
         return d
 
 
@@ -212,18 +283,30 @@ class ArchwizardPhonemius:
     Orchestrates track selection, transition planning, and output generation.
     """
 
-    def __init__(self, database, config: dict):
+    def __init__(self, database, config: dict, persona: Optional[DJPersona] = None):
         """
         Initialize Phonemius with database and configuration.
 
         Args:
             database: Database connection for track metadata
             config: Configuration dict
+            persona: DJ Persona (tech_house, high_energy, minimal, acid) - defaults to tech_house
         """
         self.db = database
         self.config = config
         self.constraints = SelectionConstraints(config.get("constraints", {}))
-        logger.info("ArchwizardPhonemius initialized")
+        
+        # Set persona (default to tech_house if not provided)
+        if persona is None:
+            self.persona = DJPersona.TECH_HOUSE
+        elif isinstance(persona, str):
+            persona_obj = get_persona_by_name(persona)
+            self.persona = persona_obj if persona_obj else DJPersona.TECH_HOUSE
+        else:
+            self.persona = persona
+        
+        self.persona_config = get_persona_config(self.persona)
+        logger.info(f"ArchwizardPhonemius initialized with persona: {self.persona.value}")
 
     def _select_seed_track(self, library: List[Dict[str, Any]], seed_track_id: Optional[str] = None) -> Optional[str]:
         """
@@ -328,6 +411,10 @@ class ArchwizardPhonemius:
                     )
                     if mix_out_cue:
                         outro_start_seconds = mix_out_cue.get("position_seconds")
+                        # Quantize outro to nearest bar boundary for beat-precise transitions
+                        if outro_start_seconds and native_bpm and native_bpm > 0:
+                            outgoing_bar = 4 * 60.0 / native_bpm
+                            outro_start_seconds = round(outro_start_seconds / outgoing_bar) * outgoing_bar
                 sections = track_analysis.get("sections")
                 if sections:
                     sections_json = json.dumps(sections)
@@ -344,6 +431,12 @@ class ArchwizardPhonemius:
                         )
                         if drop_cue:
                             drop_position_seconds = drop_cue.get("position_seconds")
+                            # Quantize drop to nearest bar boundary of incoming track for beat sync
+                            if drop_position_seconds and next_track_id:
+                                next_track_bpm = library_dict.get(next_track_id, {}).get("bpm")
+                                if next_track_bpm and next_track_bpm > 0:
+                                    incoming_bar = 4 * 60.0 / next_track_bpm
+                                    drop_position_seconds = max(0.0, round(drop_position_seconds / incoming_bar) * incoming_bar)
 
             # Choose transition type using pro DJ decision engine
             transition_spec = self._choose_transition(
@@ -410,6 +503,93 @@ class ArchwizardPhonemius:
             transitions.append(plan)
 
         logger.info(f"Planned {len(transitions)} transitions")
+        
+        # Apply DJ Techniques Phases if available
+        if DJ_TECHNIQUES_AVAILABLE:
+            logger.info("Applying DJ Techniques phases (1-4)...")
+            
+            # Create spectral data dict from library
+            spectral_data = {}
+            for tid in track_ids:
+                if tid in analysis_cache:
+                    analysis = analysis_cache[tid]
+                    spectral_data[tid] = {
+                        'outro_start_seconds': analysis.get('outro_start_seconds'),
+                        'duration_seconds': analysis.get('duration_seconds'),
+                        'bass_energy': analysis.get('bass_energy', 0.7),
+                        'kick_strength': analysis.get('kick_strength', 0.75),
+                    }
+                else:
+                    # Fallback spectral data
+                    spectral_data[tid] = {
+                        'outro_start_seconds': 240.0,
+                        'duration_seconds': 300.0,
+                        'bass_energy': 0.70,
+                        'kick_strength': 0.75,
+                    }
+            
+            # Phase 1: Early Transitions
+            phase1_enhanced = []
+            for trans in transitions:
+                try:
+                    spectral = spectral_data.get(trans.track_id, {})
+                    enhanced = enhance_transition_plan_with_early_timing(
+                        trans.to_dict(),
+                        spectral,
+                        enable_early_start=True,
+                    )
+                    # Update transition with Phase 1 fields
+                    trans.phase1_early_start_enabled = enhanced.get('phase1_early_start_enabled', False)
+                    trans.phase1_transition_start_seconds = enhanced.get('phase1_transition_start_seconds')
+                    trans.phase1_transition_end_seconds = enhanced.get('phase1_transition_end_seconds')
+                    trans.phase1_transition_bars = enhanced.get('phase1_transition_bars', 16)
+                    phase1_enhanced.append(trans.to_dict())
+                except Exception as e:
+                    logger.warning(f"Phase 1 enhancement failed for track {trans.track_id}: {e}")
+                    phase1_enhanced.append(trans.to_dict())
+            
+            # Phase 2: Bass Cut Control
+            phase2_enhanced = []
+            for i, trans_dict in enumerate(phase1_enhanced):
+                try:
+                    outgoing_spectral = spectral_data.get(trans_dict.get('track_id'), {})
+                    incoming_spectral = spectral_data.get(trans_dict.get('next_track_id'), {})
+                    
+                    enhanced = enhance_transition_with_bass_cut(
+                        trans_dict,
+                        incoming_spectral,
+                        outgoing_spectral,
+                        enable_bass_cut=True,
+                    )
+                    # Update transition with Phase 2 fields
+                    transitions[i].phase2_bass_cut_enabled = enhanced.get('phase2_bass_cut_enabled', False)
+                    transitions[i].phase2_hpf_frequency = enhanced.get('phase2_hpf_frequency', 200.0)
+                    transitions[i].phase2_cut_intensity = enhanced.get('phase2_cut_intensity', 0.65)
+                    transitions[i].phase2_strategy = enhanced.get('phase2_strategy', 'instant')
+                    phase2_enhanced.append(enhanced)
+                except Exception as e:
+                    logger.warning(f"Phase 2 enhancement failed for track {trans_dict.get('track_id')}: {e}")
+                    phase2_enhanced.append(trans_dict)
+            
+            # Phase 4: Dynamic Variation
+            try:
+                variation_params = VariationParams(seed=None)  # Random for each generation
+                phase4_enhanced = enhance_transitions_with_variation(
+                    phase2_enhanced,
+                    variation_params,
+                )
+                
+                # Update transitions with Phase 4 fields
+                for i, trans_dict in enumerate(phase4_enhanced):
+                    transitions[i].phase4_strategy = trans_dict.get('phase4_strategy', 'instant')
+                    transitions[i].phase4_timing_variation_bars = trans_dict.get('phase4_timing_variation_bars', 0.0)
+                    transitions[i].phase4_intensity_variation = trans_dict.get('phase4_intensity_variation', 0.65)
+                    transitions[i].phase4_skip_bass_cut = trans_dict.get('phase4_skip_bass_cut', False)
+                
+                logger.info("✅ DJ Techniques phases applied successfully")
+            except Exception as e:
+                logger.warning(f"Phase 4 enhancement failed: {e}")
+        
         return transitions
 
     def _choose_transition(
@@ -669,8 +849,14 @@ class ArchwizardPhonemius:
             logger.error("Failed to select seed track")
             return None
 
-        # Use Merlin selector to build playlist
-        selector = MerlinGreedySelector(self.db, self.constraints)
+        # Use appropriate selector based on persona
+        if self.persona_config.selector_mode == "blastxcss":
+            selector = BlastxcssSelector(self.db, self.constraints)
+            logger.info(f"Using BlastxcssSelector (high-energy) for {self.persona.value}")
+        else:
+            selector = MerlinGreedySelector(self.db, self.constraints)
+            logger.info(f"Using MerlinGreedySelector (balanced) for {self.persona.value}")
+        
         track_ids = selector.build_playlist(library, seed_id, target_duration_minutes)
 
         if not track_ids or len(track_ids) < 2:
@@ -812,6 +998,7 @@ def generate(
     target_duration_minutes: Optional[int] = None,
     seed_track_id: Optional[str] = None,
     database=None,
+    persona: Optional[str] = None,
 ) -> Optional[tuple]:
     """
     Generate playlist.m3u and transitions.json (full end-to-end generation).
@@ -828,6 +1015,7 @@ def generate(
         target_duration_minutes: Target mix duration (triggers Phonemius mode)
         seed_track_id: Seed track for Phonemius (optional)
         database: Database connection (required for Phonemius)
+        persona: DJ Persona ("tech_house", "high_energy", "minimal", "acid")
 
     Returns:
         Tuple of (playlist_path, transitions_path) or None if failed
@@ -839,7 +1027,7 @@ def generate(
     # Mode 1: Orchestrated generation (Phonemius)
     if target_duration_minutes is not None and database is not None and library is not None:
         logger.info("Using orchestrated playlist generation (Phonemius)")
-        phonemius = ArchwizardPhonemius(database, config)
+        phonemius = ArchwizardPhonemius(database, config, persona=persona)
         result = phonemius.build_playlist(library, target_duration_minutes, seed_track_id=seed_track_id)
         if result is None:
             return None
